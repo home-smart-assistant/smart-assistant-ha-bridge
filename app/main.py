@@ -6,7 +6,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 
-APP_NAME = "smart_assistant_backend_ha_bridge"
+APP_NAME = "smart_assistant_ha_bridge"
 HA_ENABLED = os.getenv("HA_ENABLED", "false").lower() == "true"
 HA_BASE_URL = os.getenv("HA_BASE_URL", "http://homeassistant.local:8123").rstrip("/")
 HA_TOKEN = os.getenv("HA_TOKEN", "")
@@ -167,3 +167,4 @@ def normalize_service_data(tool_name: str, arguments: dict[str, Any]) -> dict[st
         return {"entity_id": entity_id, "temperature": temperature}
 
     raise HTTPException(status_code=400, detail=f"unsupported tool: {tool_name}")
+

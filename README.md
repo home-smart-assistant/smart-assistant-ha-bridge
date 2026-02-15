@@ -1,4 +1,4 @@
-﻿# smart_assistant_backend_ha_bridge
+﻿# smart_assistant_ha_bridge
 
 Python Home Assistant Bridge 服务。
 
@@ -33,3 +33,4 @@ uvicorn app.main:app --host 0.0.0.0 --port 8092 --reload
 docker build -t smart-assistant-ha-bridge .
 docker run --rm -p 8092:8092 --env-file .env.example smart-assistant-ha-bridge
 ```
+
