@@ -14,6 +14,9 @@ Python Home Assistant Bridge 服务。
 - `home.scene.activate`
 - `home.climate.set_temperature`
 
+## 工具调用契约
+- `docs/schemas/tool-call.schema.json`
+
 ## 本地运行
 ```bash
 python -m venv .venv
