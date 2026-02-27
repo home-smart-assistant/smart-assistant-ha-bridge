@@ -1,39 +1,95 @@
 ﻿# smart_assistant_ha_bridge
 
-Python Home Assistant Bridge 服务。
+Python Home Assistant Bridge.
 
-## 能力范围（V1）
-- 白名单工具调用入口：`POST /v1/tools/call`
-- 工具列表查询：`GET /v1/tools/whitelist`
-- 健康检查：`GET /health`
-- 支持真实 HA 调用或模拟模式
+## Tech Stack
+- Python
+- FastAPI / Uvicorn
+- httpx
+- SQLite (embedded)
 
-## 白名单工具
-- `home.lights.on`
-- `home.lights.off`
-- `home.scene.activate`
-- `home.climate.set_temperature`
+## Responsibilities
+- Execute HA tool calls through a whitelist/catalog
+- Persist API catalog + tool catalog in embedded SQLite (`HA_DB_PATH`, default `app/bridge.db`)
+- Keep legacy tool catalog JSON (`HA_TOOL_CATALOG_PATH`) in sync for compatibility
+- Provide HA context summary for Agent
+- Record external/API requests and UI operation logs to file (`HA_LOG_PATH`, JSONL)
 
-## 工具调用契约
-- `docs/schemas/tool-call.schema.json`
+## Project Structure
+```
+app/
+  main.py                  # FastAPI app entrypoint, router assembly
+  core/settings.py         # Runtime settings, paths, locks, entity map
+  models/schemas.py        # Pydantic request/response models
+  storage/catalog_storage.py # SQLite + legacy JSON persistence
+  services/                # Business logic (config/catalog/HA)
+  routers/                 # API route modules
+  web/ui.html              # Frontend UI
+```
 
-## 本地运行
+## Core APIs
+- `GET /v1/apis/catalog`
+- `GET /v1/tools/whitelist`
+- `GET /v1/tools/catalog`
+- `PUT /v1/tools/catalog/{tool_name}`
+- `DELETE /v1/tools/catalog/{tool_name}`
+- `POST /v1/tools/catalog/reload`
+- `POST /v1/tools/call`
+- `POST /v1/device/lights/control`
+- `POST /v1/device/curtains/control`
+- `POST /v1/device/climate/control`
+- `POST /v1/device/custom/control`
+- `GET /v1/config/ha`
+- `PUT /v1/config/ha`
+- `GET /v1/context/summary`
+- `GET /v1/ha/overview`
+- `GET /v1/ha/areas`
+- `GET /v1/ha/entities`
+- `GET /v1/ha/entities/{entity_id}`
+- `GET /v1/ha/services`
+- `POST /v1/logs/ui`
+- `GET /v1/logs/recent`
+
+接口细节见：`docs/API.md`
+
+## Local Run
 ```bash
-python -m venv .venv
-. .venv/Scripts/activate
+cp .env.example .env
 pip install -r requirements.txt
 uvicorn app.main:app --host 0.0.0.0 --port 8092 --reload
 ```
 
-## 环境变量
-参考 `.env.example`
+Runtime settings are loaded from `.env` automatically if the file exists.
 
-- `HA_ENABLED=false` 时，返回模拟成功，便于联调
-- `HA_ENABLED=true` 时，按 `HA_BASE_URL` + `HA_TOKEN` 调用真实 Home Assistant
+## Key Config
+See `.env.example`.
 
-## Docker
-```bash
-docker build -t smart-assistant-ha-bridge .
-docker run --rm -p 8092:8092 --env-file .env.example smart-assistant-ha-bridge
-```
+- `HA_BASE_URL`
+- `HA_TOKEN`
+- `HA_TIMEOUT_SEC`
+- `HA_CONTEXT_TIMEOUT_SEC`
+- `HA_TOOL_CATALOG_PATH`
+- `HA_DB_PATH`
+- `HA_LOG_PATH`
+- `HA_LOG_MAX_BYTES`
+- `HA_LOG_BACKUP_COUNT`
+- `HA_LOG_RETENTION_DAYS`
+- `HA_LOG_QUEUE_MAX`
 
+Entity mapping:
+- `HA_LIGHT_LIVING_ROOM_ENTITY_ID`
+- `HA_LIGHT_BEDROOM_ENTITY_ID`
+- `HA_LIGHT_STUDY_ENTITY_ID`
+- `HA_CLIMATE_LIVING_ROOM_ENTITY_ID`
+- `HA_CLIMATE_BEDROOM_ENTITY_ID`
+- `HA_CLIMATE_STUDY_ENTITY_ID`
+- `HA_COVER_LIVING_ROOM_ENTITY_ID`
+- `HA_COVER_BEDROOM_ENTITY_ID`
+- `HA_COVER_STUDY_ENTITY_ID`
+
+## Notes
+- The bridge always calls real Home Assistant services (no mock mode).
+- API管理和工具管理目前建议按只读使用，后续可再开放 UI 写操作。
+- 日志只写文件，不写数据库；采用异步队列写盘，避免阻塞接口请求。
+- 日志采用按大小轮转 + 保留份数/天数清理，并在队列满时丢弃并计数。
+- 可使用 `dry_run=true` 做无副作用预演。

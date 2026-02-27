@@ -1,170 +1,89 @@
-﻿import os
-from typing import Any
+from time import perf_counter
 
-import httpx
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
+from fastapi import FastAPI, Request
 
-
-APP_NAME = "smart_assistant_ha_bridge"
-HA_ENABLED = os.getenv("HA_ENABLED", "false").lower() == "true"
-HA_BASE_URL = os.getenv("HA_BASE_URL", "http://homeassistant.local:8123").rstrip("/")
-HA_TOKEN = os.getenv("HA_TOKEN", "")
-HA_TIMEOUT_SEC = float(os.getenv("HA_TIMEOUT_SEC", "6"))
-
-app = FastAPI(title=APP_NAME, version="0.1.0")
-
-# 白名单能力定义（只暴露可控范围，避免越权）。
-TOOL_WHITELIST: dict[str, dict[str, Any]] = {
-    "home.lights.on": {"domain": "light", "service": "turn_on"},
-    "home.lights.off": {"domain": "light", "service": "turn_off"},
-    "home.scene.activate": {"domain": "scene", "service": "turn_on"},
-    "home.climate.set_temperature": {"domain": "climate", "service": "set_temperature"},
-}
-
-AREA_ENTITY_MAP = {
-    "light": {
-        "living_room": "light.living_room",
-        "bedroom": "light.bedroom",
-        "study": "light.study",
-    },
-    "climate": {
-        "living_room": "climate.living_room_ac",
-        "bedroom": "climate.bedroom_ac",
-        "study": "climate.study_ac",
-    },
-}
+from app.core.settings import APP_NAME
+from app.routers.catalog import router as catalog_router
+from app.routers.config import router as config_router
+from app.routers.context import router as context_router
+from app.routers.device import router as device_router
+from app.routers.ha import router as ha_router
+from app.routers.log import router as log_router
+from app.routers.tool_call import router as tool_call_router
+from app.routers.ui import router as ui_router
+from app.services.catalog_service import initialize_catalog_state
+from app.services.config_service import initialize_runtime_config_state
+from app.services.log_service import log_http_request, start_log_worker, stop_log_worker
+from app.storage.catalog_storage import bootstrap_storage
 
 
-class ToolCallRequest(BaseModel):
-    tool_name: str
-    arguments: dict[str, Any] = Field(default_factory=dict)
-    trace_id: str | None = None
+bootstrap_storage()
+initialize_runtime_config_state()
+initialize_catalog_state()
 
 
-class ToolCallResponse(BaseModel):
-    success: bool
-    message: str
-    trace_id: str | None = None
-    data: dict[str, Any] | None = None
+app = FastAPI(
+    title=APP_NAME,
+    version="0.4.0",
+    description="Home Assistant bridge service with modularized API, service, storage, and UI layers.",
+    openapi_tags=[
+        {"name": "system", "description": "System configuration and runtime state"},
+        {"name": "catalog", "description": "Read/write tool and API catalogs"},
+        {"name": "tool-call", "description": "Tool execution endpoints"},
+        {"name": "device", "description": "Structured device control endpoints"},
+        {"name": "context", "description": "Home Assistant context endpoints"},
+        {"name": "ha", "description": "Home Assistant discovery APIs for agents"},
+    ],
+)
 
 
-@app.get("/health")
-async def health() -> dict[str, Any]:
-    return {
-        "service": APP_NAME,
-        "status": "ok",
-        "ha_enabled": HA_ENABLED,
-        "ha_base_url": HA_BASE_URL,
-        "whitelist_count": len(TOOL_WHITELIST),
-    }
+@app.on_event("startup")
+async def on_startup() -> None:
+    start_log_worker()
 
 
-@app.get("/v1/tools/whitelist")
-async def list_whitelist() -> dict[str, Any]:
-    return {
-        "tools": sorted(TOOL_WHITELIST.keys())
-    }
+@app.on_event("shutdown")
+async def on_shutdown() -> None:
+    stop_log_worker()
 
 
-@app.post("/v1/tools/call", response_model=ToolCallResponse)
-async def call_tool(req: ToolCallRequest) -> ToolCallResponse:
-    if req.tool_name not in TOOL_WHITELIST:
-        raise HTTPException(status_code=400, detail=f"tool not allowed: {req.tool_name}")
-
-    service_def = TOOL_WHITELIST[req.tool_name]
-    domain = service_def["domain"]
-    service = service_def["service"]
-
-    service_data = normalize_service_data(req.tool_name, req.arguments)
-
-    if not HA_ENABLED:
-        return ToolCallResponse(
-            success=True,
-            message="HA mock mode: command accepted",
-            trace_id=req.trace_id,
-            data={
-                "domain": domain,
-                "service": service,
-                "service_data": service_data,
-                "mode": "mock",
-            },
-        )
-
-    if not HA_TOKEN:
-        return ToolCallResponse(
-            success=False,
-            message="HA token missing",
-            trace_id=req.trace_id,
-        )
-
-    path = f"/api/services/{domain}/{service}"
-
+@app.middleware("http")
+async def access_log_middleware(request: Request, call_next):
+    start = perf_counter()
+    status_code = 500
     try:
-        async with httpx.AsyncClient(timeout=HA_TIMEOUT_SEC) as client:
-            resp = await client.post(
-                f"{HA_BASE_URL}{path}",
-                headers={
-                    "Authorization": f"Bearer {HA_TOKEN}",
-                    "Content-Type": "application/json",
-                },
-                json=service_data,
-            )
-
-            if resp.status_code >= 400:
-                return ToolCallResponse(
-                    success=False,
-                    message=f"HA call failed: {resp.status_code} {resp.text}",
-                    trace_id=req.trace_id,
-                )
-
-            payload = resp.json() if resp.content else {}
-            return ToolCallResponse(
-                success=True,
-                message="HA call succeeded",
-                trace_id=req.trace_id,
-                data={
-                    "domain": domain,
-                    "service": service,
-                    "service_data": service_data,
-                    "ha_response": payload,
-                },
-            )
-    except Exception as ex:
-        return ToolCallResponse(
-            success=False,
-            message=f"HA bridge error: {ex}",
-            trace_id=req.trace_id,
-        )
-
-
-def normalize_service_data(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-    if tool_name in {"home.lights.on", "home.lights.off"}:
-        area = str(arguments.get("area", "living_room"))
-        entity_id = AREA_ENTITY_MAP["light"].get(area, AREA_ENTITY_MAP["light"]["living_room"])
-        return {"entity_id": entity_id}
-
-    if tool_name == "home.scene.activate":
-        scene_id = str(arguments.get("scene_id", "scene.home"))
-        return {"entity_id": scene_id}
-
-    if tool_name == "home.climate.set_temperature":
-        area = str(arguments.get("area", "living_room"))
-        entity_id = AREA_ENTITY_MAP["climate"].get(area, AREA_ENTITY_MAP["climate"]["living_room"])
-
-        temp_raw = arguments.get("temperature")
-        if temp_raw is None:
-            raise HTTPException(status_code=400, detail="temperature is required")
-
+        response = await call_next(request)
+        status_code = response.status_code
+        return response
+    finally:
         try:
-            temperature = int(temp_raw)
-        except (TypeError, ValueError):
-            raise HTTPException(status_code=400, detail="temperature must be an integer")
+            source = (request.headers.get("X-HA-Bridge-Source", "external") or "external").strip().lower()
+            if source not in {"ui", "external", "system"}:
+                source = "external"
 
-        if not 16 <= temperature <= 30:
-            raise HTTPException(status_code=400, detail="temperature must be between 16 and 30")
+            query = str(request.url.query or "").strip()
+            detail = {"query": query} if query else {}
+            duration_ms = round((perf_counter() - start) * 1000, 2)
+            client_ip = request.client.host if request.client else None
+            log_http_request(
+                source=source,
+                method=request.method,
+                path=request.url.path,
+                status_code=status_code,
+                duration_ms=duration_ms,
+                client_ip=client_ip,
+                detail=detail,
+            )
+        except Exception:
+            # Logging failure must never block business requests.
+            pass
 
-        return {"entity_id": entity_id, "temperature": temperature}
 
-    raise HTTPException(status_code=400, detail=f"unsupported tool: {tool_name}")
-
+app.include_router(ui_router)
+app.include_router(config_router)
+app.include_router(catalog_router)
+app.include_router(tool_call_router)
+app.include_router(device_router)
+app.include_router(context_router)
+app.include_router(ha_router)
+app.include_router(log_router)

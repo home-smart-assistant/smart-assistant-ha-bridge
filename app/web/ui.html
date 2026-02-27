@@ -1,0 +1,1333 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>HA Bridge Console</title>
+  <style>
+    :root {
+      --bg: #edf5fb;
+      --surface: #fff;
+      --line: #d6e3ef;
+      --text: #13263b;
+      --muted: #5e7187;
+      --brand: #0f6f8f;
+      --brand-strong: #0b5972;
+      --ok: #1e7c5f;
+      --warn: #a5751b;
+      --err: #b7473c;
+      --radius: 12px;
+      --shadow: 0 10px 28px rgba(12, 49, 78, 0.09);
+    }
+
+    * { box-sizing: border-box; }
+
+    html,
+    body {
+      margin: 0;
+      min-height: 100%;
+      color: var(--text);
+      background:
+        radial-gradient(860px 420px at 0 -15%, #d9ebff 0%, transparent 65%),
+        radial-gradient(760px 360px at 100% -18%, #e7f8f0 0%, transparent 62%),
+        var(--bg);
+      font-family: "PingFang SC", "Noto Sans SC", "Microsoft YaHei UI", sans-serif;
+    }
+
+    .app { min-height: 100vh; display: flex; flex-direction: column; }
+
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.9);
+      backdrop-filter: blur(8px);
+    }
+
+    .brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+    .brand h1 { margin: 0; font-size: 20px; white-space: nowrap; }
+
+    .badge {
+      border-radius: 999px;
+      border: 1px solid;
+      padding: 4px 10px;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .info { color: #176f98; background: #e9f5fd; border-color: #b8ddf1; }
+    .ok { color: var(--ok); background: #eaf9f3; border-color: #bfe9d8; }
+    .warn { color: var(--warn); background: #fff7e8; border-color: #ebd8b7; }
+    .err { color: var(--err); background: #fdeeee; border-color: #efc7c3; }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 220px minmax(0, 1fr);
+      flex: 1;
+      min-height: 0;
+    }
+
+    .sidebar {
+      padding: 12px;
+      border-right: 1px solid var(--line);
+      background: linear-gradient(180deg, #f8fcff 0%, #f2f8ff 100%);
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      overflow: auto;
+    }
+
+    .sidebar small {
+      color: var(--muted);
+      margin: 6px 8px 8px;
+      letter-spacing: 0.6px;
+    }
+
+    .nav {
+      border: 1px solid transparent;
+      border-radius: 10px;
+      background: transparent;
+      color: var(--text);
+      text-align: left;
+      cursor: pointer;
+      padding: 10px 12px;
+      font-size: 14px;
+    }
+
+    .nav:hover { background: #f3f9ff; border-color: #d5e7f6; }
+    .nav.active { background: #e8f3ff; border-color: #bfddf3; color: #104f76; }
+
+    .content {
+      overflow: auto;
+      padding: 14px 16px 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .view { display: none; }
+    .view.active {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      animation: in 0.24s ease both;
+    }
+
+    @keyframes in {
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 12px;
+    }
+
+    .head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 10px;
+    }
+
+    .head h2,
+    .head h3 { margin: 0; font-size: 17px; }
+
+    .muted { margin: 0; color: var(--muted); font-size: 13px; }
+
+    .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+    .row {
+      display: grid;
+      grid-template-columns: 170px minmax(0, 1fr);
+      gap: 10px;
+      align-items: start;
+      margin: 8px 0;
+    }
+
+    .row > label {
+      color: var(--muted);
+      font-size: 13px;
+      padding-top: 9px;
+    }
+
+    .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+    input,
+    select,
+    textarea,
+    button {
+      font: inherit;
+    }
+
+    input,
+    select,
+    textarea {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #fff;
+      color: var(--text);
+      padding: 9px 10px;
+      outline: none;
+    }
+
+    textarea {
+      min-height: 120px;
+      resize: vertical;
+      font-family: "Cascadia Code", "Consolas", monospace;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    input:focus,
+    select:focus,
+    textarea:focus {
+      border-color: #90c7e7;
+      box-shadow: 0 0 0 3px rgba(118, 183, 220, 0.2);
+    }
+
+    button {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #fff;
+      color: var(--text);
+      padding: 8px 11px;
+      cursor: pointer;
+    }
+
+    button:hover { background: #f5fbff; border-color: #c3daed; }
+
+    .pri { background: var(--brand); border-color: var(--brand); color: #fff; }
+    .pri:hover { background: var(--brand-strong); border-color: var(--brand-strong); }
+
+    .good { background: #1d8b6a; border-color: #1d8b6a; color: #fff; }
+    .good:hover { background: #177456; border-color: #177456; }
+
+    .table-wrap { border: 1px solid var(--line); border-radius: 10px; overflow: auto; }
+
+    table { width: 100%; border-collapse: collapse; min-width: 760px; font-size: 13px; }
+    thead { background: #f4f9ff; }
+
+    th,
+    td {
+      text-align: left;
+      border-bottom: 1px solid #e8eff7;
+      padding: 9px 10px;
+      vertical-align: top;
+    }
+
+    .pill {
+      display: inline-flex;
+      border: 1px solid;
+      border-radius: 999px;
+      padding: 2px 8px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    .on { color: #1c785b; background: #eaf9f2; border-color: #bee8d8; }
+    .off { color: #896015; background: #fff7e8; border-color: #ecd7b6; }
+
+    .mono {
+      font-family: "Cascadia Code", "Consolas", monospace;
+      font-size: 12px;
+      word-break: break-all;
+    }
+
+    pre {
+      margin: 0;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #f8fbff;
+      padding: 10px;
+      overflow: auto;
+      min-height: 88px;
+      font-family: "Cascadia Code", "Consolas", monospace;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    #output {
+      min-height: 210px;
+      background: #0f2536;
+      color: #e9f4ff;
+      border-color: #2f4d63;
+    }
+
+    .hint {
+      border: 1px dashed #c6d8e8;
+      border-radius: 10px;
+      background: #f8fbff;
+      padding: 10px;
+      color: #4e6377;
+      font-size: 13px;
+      line-height: 1.6;
+    }
+
+    .modal {
+      position: fixed;
+      inset: 0;
+      z-index: 60;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+      background: rgba(15, 33, 49, 0.42);
+    }
+
+    .modal.show { display: flex; }
+
+    .modal-panel {
+      width: min(980px, 96vw);
+      max-height: 88vh;
+      overflow: auto;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 12px;
+    }
+
+    #logModalContent {
+      min-height: 280px;
+      max-height: 70vh;
+      overflow: auto;
+    }
+
+    @media (max-width: 1080px) {
+      .grid2 { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 860px) {
+      .topbar { position: static; flex-wrap: wrap; }
+      .layout { grid-template-columns: 1fr; }
+      .sidebar {
+        flex-direction: row;
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+        overflow: auto;
+      }
+      .sidebar small { display: none; }
+      .nav { white-space: nowrap; }
+      .row { grid-template-columns: 1fr; }
+      .row > label { padding-top: 0; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <h1>HA Bridge Console</h1>
+        <span id="status" class="badge info">等待加载</span>
+      </div>
+    </header>
+
+    <div class="layout">
+      <aside class="sidebar">
+        <small>MENU</small>
+        <button class="nav active" data-view="apis">API管理</button>
+        <button class="nav" data-view="tools">工具管理</button>
+        <button class="nav" data-view="debug">API调试</button>
+        <button class="nav" data-view="logs">日志中心</button>
+        <button class="nav" data-view="config">系统配置</button>
+      </aside>
+
+      <main class="content">
+        <section id="v-apis" class="view active">
+          <div class="card">
+            <div class="head">
+              <h2>API管理（只读）</h2>
+              <div class="actions">
+                <button id="btnLoadApis">刷新 API 列表</button>
+              </div>
+            </div>
+            <p class="muted">当前只读展示，后续可以扩展为 UI 直接维护。</p>
+            <div class="row" style="grid-template-columns: 1fr;">
+              <input id="apiSearch" placeholder="搜索 display_name / method / path / description" />
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th style="width: 20%;">名称</th>
+                    <th style="width: 10%;">Method</th>
+                    <th style="width: 20%;">Path</th>
+                    <th style="width: 24%;">描述</th>
+                    <th style="width: 8%;">只读</th>
+                    <th style="width: 8%;">排序</th>
+                    <th style="width: 10%;">操作</th>
+                  </tr>
+                </thead>
+                <tbody id="apiBody">
+                  <tr><td colspan="7" class="muted">等待加载 API 清单...</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p id="apiStorageHint" class="muted" style="margin-top: 10px;">存储信息待加载...</p>
+          </div>
+        </section>
+
+        <section id="v-tools" class="view">
+          <div class="card">
+            <div class="head">
+              <h2>工具管理（只读）</h2>
+              <div class="actions">
+                <button id="btnLoadTools">刷新工具列表</button>
+              </div>
+            </div>
+            <p class="muted">工具是控制 HA 的关键字映射（tool_name），例如 `home.lights.on`。</p>
+            <div class="row" style="grid-template-columns: 1fr;">
+              <input id="toolSearch" placeholder="搜索 tool_name / strategy / description" />
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th style="width: 22%;">tool_name</th>
+                    <th style="width: 10%;">状态</th>
+                    <th style="width: 14%;">strategy</th>
+                    <th style="width: 14%;">domain/service</th>
+                    <th style="width: 20%;">description</th>
+                    <th style="width: 20%;">default_arguments</th>
+                  </tr>
+                </thead>
+                <tbody id="toolBody">
+                  <tr><td colspan="6" class="muted">等待加载工具清单...</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p id="toolStorageHint" class="muted" style="margin-top: 10px;">存储信息待加载...</p>
+          </div>
+        </section>
+
+        <section id="v-debug" class="view">
+          <div class="grid2">
+            <div class="card">
+              <div class="head">
+                <h2>API调试</h2>
+                <div class="actions">
+                  <button id="btnUseApiExample">填充接口示例</button>
+                  <button id="btnCallApi" class="good">发送调试请求</button>
+                </div>
+              </div>
+              <div class="row">
+                <label for="dbgApiKey">调试接口</label>
+                <select id="dbgApiKey"></select>
+              </div>
+              <div class="row">
+                <label for="dbgMethod">Method</label>
+                <input id="dbgMethod" readonly />
+              </div>
+              <div class="row">
+                <label for="dbgPathTemplate">Path 模板</label>
+                <input id="dbgPathTemplate" readonly />
+              </div>
+              <div class="row">
+                <label for="dbgPath">请求路径</label>
+                <input id="dbgPath" />
+              </div>
+              <p class="muted">如路径含占位符（如 `{id}`），请直接在“请求路径”中填入真实值。</p>
+              <div class="row">
+                <label for="dbgBody">Body(JSON)</label>
+                <textarea id="dbgBody" spellcheck="false">{
+}</textarea>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="head"><h3>API示例</h3></div>
+              <pre id="debugApiExample">等待加载示例...</pre>
+              <div id="dbgToolHelper" style="margin-top: 10px;">
+                <div class="head"><h3>工具调用辅助</h3></div>
+                <div class="row">
+                  <label for="dbgTool">工具关键字</label>
+                  <select id="dbgTool"></select>
+                </div>
+                <div class="row">
+                  <label for="dbgTrace">trace_id</label>
+                  <input id="dbgTrace" placeholder="ui-debug-001" />
+                </div>
+                <div class="row">
+                  <label for="dbgArgs">arguments(JSON)</label>
+                  <textarea id="dbgArgs" spellcheck="false">{
+  "area": "study"
+}</textarea>
+                </div>
+                <div class="actions">
+                  <button id="btnUseToolDefaults">填充工具默认参数</button>
+                  <button id="btnBuildToolCallBody">生成 tool_call Body</button>
+                </div>
+              </div>
+              <div class="head" style="margin-top: 10px;"><h3>当前工具信息</h3></div>
+              <pre id="debugToolMeta">请先选择工具...</pre>
+            </div>
+          </div>
+        </section>
+
+        <section id="v-logs" class="view">
+          <div class="card">
+            <div class="head">
+              <h2>日志中心</h2>
+              <div class="actions">
+                <button id="btnLoadLogs">刷新日志</button>
+              </div>
+            </div>
+            <div class="grid2">
+              <div class="row">
+                <label for="logEventType">日志类型</label>
+                <select id="logEventType">
+                  <option value="">全部</option>
+                  <option value="http_request">http_request</option>
+                  <option value="ui_action">ui_action</option>
+                  <option value="ha_request">ha_request</option>
+                  <option value="ha_call">ha_call</option>
+                </select>
+              </div>
+              <div class="row">
+                <label for="logSource">来源</label>
+                <select id="logSource">
+                  <option value="">全部</option>
+                  <option value="external">external</option>
+                  <option value="ui">ui</option>
+                  <option value="system">system</option>
+                </select>
+              </div>
+            </div>
+            <div class="row">
+              <label for="logLimit">最近条数</label>
+              <input id="logLimit" type="number" min="10" max="1000" step="10" value="200" />
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th style="width: 14%;">时间</th>
+                    <th style="width: 8%;">来源</th>
+                    <th style="width: 10%;">类型</th>
+                    <th style="width: 12%;">动作</th>
+                    <th style="width: 6%;">Method</th>
+                    <th style="width: 16%;">Path</th>
+                    <th style="width: 6%;">状态</th>
+                    <th style="width: 8%;">耗时ms</th>
+                    <th style="width: 6%;">成功</th>
+                    <th style="width: 14%;">详情</th>
+                  </tr>
+                </thead>
+                <tbody id="logBody">
+                  <tr><td colspan="10" class="muted">等待加载日志...</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p class="muted" style="margin-top: 10px;">双击任意日志行可查看完整详情。</p>
+            <p id="logStorageHint" class="muted" style="margin-top: 10px;">日志存储信息待加载...</p>
+          </div>
+        </section>
+
+        <section id="v-config" class="view">
+          <div class="card">
+            <div class="head">
+              <h2>系统配置</h2>
+              <div class="actions">
+                <button id="btnLoadConfig">读取配置</button>
+                <button id="btnSaveConfig" class="pri">保存配置</button>
+              </div>
+            </div>
+            <div class="grid2" style="margin-top: 10px;">
+              <div>
+                <div class="row"><label for="cfgBase">HA Base URL</label><input id="cfgBase" placeholder="http://homeassistant.local:8123" /></div>
+                <div class="row"><label for="cfgToken">HA Token</label><input id="cfgToken" type="password" placeholder="留空表示不修改" /></div>
+                <div class="row"><label for="cfgTimeout">调用超时(秒)</label><input id="cfgTimeout" type="number" min="0.1" step="0.1" /></div>
+                <div class="row"><label for="cfgCtxTimeout">上下文超时(秒)</label><input id="cfgCtxTimeout" type="number" min="0.1" step="0.1" /></div>
+              </div>
+              <div>
+                <div id="cfgTokenState" class="hint">Token 状态待加载...</div>
+                <div class="hint" style="margin-top: 8px;">可在此更新 HA 访问 token；若不想改 token，保持留空即可。</div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section id="outputCard" class="card">
+          <div class="head">
+            <h3>请求输出</h3>
+            <div class="actions">
+              <button id="btnCopyOutput">复制</button>
+              <button id="btnClearOutput">清空</button>
+            </div>
+          </div>
+          <pre id="output">等待操作...</pre>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <div id="logModal" class="modal" aria-hidden="true">
+    <div class="modal-panel">
+      <div class="head">
+        <h3>日志详情</h3>
+        <div class="actions">
+          <button id="btnCloseLogModal">关闭</button>
+        </div>
+      </div>
+      <pre id="logModalContent">双击日志行查看详情...</pre>
+    </div>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+
+    const storageKey = {
+      view: "ha_bridge_active_view"
+    };
+
+    const state = {
+      apiCatalog: [],
+      toolCatalog: [],
+      logs: [],
+      selectedDebugApiKey: "",
+      selectedDebugTool: "",
+      activeView: "apis"
+    };
+
+    const dom = {
+      status: $("status"),
+      nav: Array.from(document.querySelectorAll(".nav")),
+      views: Array.from(document.querySelectorAll(".view")),
+      outputCard: $("outputCard"),
+      output: $("output"),
+
+      btnLoadApis: $("btnLoadApis"),
+      apiSearch: $("apiSearch"),
+      apiBody: $("apiBody"),
+      apiStorageHint: $("apiStorageHint"),
+
+      btnLoadTools: $("btnLoadTools"),
+      toolSearch: $("toolSearch"),
+      toolBody: $("toolBody"),
+      toolStorageHint: $("toolStorageHint"),
+
+      dbgApiKey: $("dbgApiKey"),
+      dbgMethod: $("dbgMethod"),
+      dbgPathTemplate: $("dbgPathTemplate"),
+      dbgPath: $("dbgPath"),
+      dbgBody: $("dbgBody"),
+      dbgToolHelper: $("dbgToolHelper"),
+      dbgTool: $("dbgTool"),
+      dbgTrace: $("dbgTrace"),
+      dbgArgs: $("dbgArgs"),
+      debugApiExample: $("debugApiExample"),
+      debugToolMeta: $("debugToolMeta"),
+      btnUseApiExample: $("btnUseApiExample"),
+      btnCallApi: $("btnCallApi"),
+      btnUseToolDefaults: $("btnUseToolDefaults"),
+      btnBuildToolCallBody: $("btnBuildToolCallBody"),
+
+      btnLoadLogs: $("btnLoadLogs"),
+      logEventType: $("logEventType"),
+      logSource: $("logSource"),
+      logLimit: $("logLimit"),
+      logBody: $("logBody"),
+      logStorageHint: $("logStorageHint"),
+      logModal: $("logModal"),
+      btnCloseLogModal: $("btnCloseLogModal"),
+      logModalContent: $("logModalContent"),
+
+      btnLoadConfig: $("btnLoadConfig"),
+      btnSaveConfig: $("btnSaveConfig"),
+      cfgBase: $("cfgBase"),
+      cfgToken: $("cfgToken"),
+      cfgTimeout: $("cfgTimeout"),
+      cfgCtxTimeout: $("cfgCtxTimeout"),
+      cfgTokenState: $("cfgTokenState"),
+
+      btnCopyOutput: $("btnCopyOutput"),
+      btnClearOutput: $("btnClearOutput")
+    };
+
+    function nowText() {
+      const d = new Date();
+      const p = (n) => String(n).padStart(2, "0");
+      return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+    }
+
+    function toPretty(value) {
+      return typeof value === "string" ? value : JSON.stringify(value, null, 2);
+    }
+
+    function setStatus(text, level = "info") {
+      dom.status.textContent = text;
+      dom.status.className = "badge";
+      dom.status.classList.add(level);
+    }
+
+    function setOutput(title, data) {
+      dom.output.textContent = `[${nowText()}] ${title}\n${toPretty(data)}`;
+    }
+
+    function safeParseJson(text, label) {
+      try {
+        return JSON.parse(text || "{}");
+      } catch (error) {
+        throw new Error(`${label} JSON 格式错误: ${error.message}`);
+      }
+    }
+
+    function headers(withJson = false) {
+      const h = {
+        "X-HA-Bridge-Source": "ui"
+      };
+      if (withJson) h["Content-Type"] = "application/json";
+      return h;
+    }
+
+    async function api(url, options = {}) {
+      try {
+        const mergedOptions = {
+          ...options,
+          headers: {
+            ...headers(false),
+            ...(options.headers || {})
+          }
+        };
+        const resp = await fetch(url, mergedOptions);
+        const text = await resp.text();
+        let data = {};
+        if (text) {
+          try {
+            data = JSON.parse(text);
+          } catch {
+            data = { raw: text };
+          }
+        }
+        return { ok: resp.ok, status: resp.status, data };
+      } catch (error) {
+        return { ok: false, status: 0, data: { error: String(error) } };
+      }
+    }
+
+    function logUiAction(action, detail = {}, success = null) {
+      const payload = {
+        action,
+        view: state.activeView,
+        detail
+      };
+      if (typeof success === "boolean") payload.success = success;
+      fetch("/v1/logs/ui", {
+        method: "POST",
+        headers: headers(true),
+        body: JSON.stringify(payload)
+      }).catch(() => {});
+    }
+
+    function switchView(view) {
+      const from = state.activeView;
+      state.activeView = view;
+      localStorage.setItem(storageKey.view, view);
+      dom.nav.forEach((x) => x.classList.toggle("active", x.dataset.view === view));
+      dom.views.forEach((x) => x.classList.toggle("active", x.id === `v-${view}`));
+      dom.outputCard.style.display = view === "config" ? "none" : "";
+      if (view === "logs" && from !== view) {
+        loadLogs(true).catch(() => {});
+      }
+      if (from !== view) {
+        logUiAction("view.switch", { from, to: view }, true);
+      }
+    }
+
+    function jumpToDebugByApi(endpointKey) {
+      state.selectedDebugApiKey = endpointKey;
+      switchView("debug");
+      if (dom.dbgApiKey && dom.dbgApiKey.options.length) {
+        dom.dbgApiKey.value = endpointKey;
+      }
+      applySelectedApiToDebugForm(false);
+      renderDebugMeta();
+      setStatus("已跳转到 API调试", "ok");
+      logUiAction("debug.jump_from_api", { endpoint_key: endpointKey }, true);
+    }
+
+    function renderApiTable() {
+      const kw = (dom.apiSearch.value || "").trim().toLowerCase();
+      const rows = state.apiCatalog.filter((item) => {
+        if (!kw) return true;
+        return `${item.display_name} ${item.method} ${item.path} ${item.description || ""}`.toLowerCase().includes(kw);
+      });
+
+      dom.apiBody.innerHTML = "";
+      if (!rows.length) {
+        dom.apiBody.innerHTML = '<tr><td colspan="7" class="muted">未匹配到 API。</td></tr>';
+        return;
+      }
+
+      rows.forEach((item) => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td>${item.display_name}</td>
+          <td><span class="mono">${item.method}</span></td>
+          <td><span class="mono">${item.path}</span></td>
+          <td>${item.description || "-"}</td>
+          <td>${item.read_only ? "是" : "否"}</td>
+          <td>${item.sort_order ?? 0}</td>
+        `;
+        const actionTd = document.createElement("td");
+        const actionBtn = document.createElement("button");
+        actionBtn.textContent = "调试";
+        actionBtn.addEventListener("click", () => {
+          jumpToDebugByApi(item.endpoint_key);
+        });
+        actionTd.appendChild(actionBtn);
+        tr.appendChild(actionTd);
+        dom.apiBody.appendChild(tr);
+      });
+    }
+
+    function shortJson(value) {
+      try {
+        const t = JSON.stringify(value);
+        return t.length > 72 ? `${t.slice(0, 69)}...` : t;
+      } catch {
+        return "{}";
+      }
+    }
+
+    function renderToolTable() {
+      const kw = (dom.toolSearch.value || "").trim().toLowerCase();
+      const rows = state.toolCatalog.filter((item) => {
+        if (!kw) return true;
+        return `${item.tool_name} ${item.strategy} ${item.description || ""}`.toLowerCase().includes(kw);
+      });
+
+      dom.toolBody.innerHTML = "";
+      if (!rows.length) {
+        dom.toolBody.innerHTML = '<tr><td colspan="6" class="muted">未匹配到工具。</td></tr>';
+        return;
+      }
+
+      rows.forEach((item) => {
+        const tr = document.createElement("tr");
+        const statusTag = item.enabled
+          ? '<span class="pill on">enabled</span>'
+          : '<span class="pill off">disabled</span>';
+        tr.innerHTML = `
+          <td><span class="mono">${item.tool_name}</span></td>
+          <td>${statusTag}</td>
+          <td>${item.strategy}</td>
+          <td>${item.domain} / ${item.service}</td>
+          <td>${item.description || "-"}</td>
+          <td><span class="mono">${shortJson(item.default_arguments || {})}</span></td>
+        `;
+        dom.toolBody.appendChild(tr);
+      });
+    }
+
+    function shortText(value, maxLen = 120) {
+      const text = String(value ?? "");
+      return text.length > maxLen ? `${text.slice(0, maxLen - 3)}...` : text;
+    }
+
+    function renderLogTable() {
+      dom.logBody.innerHTML = "";
+      if (!state.logs.length) {
+        dom.logBody.innerHTML = '<tr><td colspan="10" class="muted">暂无日志记录。</td></tr>';
+        return;
+      }
+
+      state.logs.forEach((item) => {
+        const tr = document.createElement("tr");
+        tr.style.cursor = "pointer";
+        tr.title = "双击查看完整日志详情";
+        const okText = item.success === null || item.success === undefined ? "-" : (item.success ? "是" : "否");
+        tr.innerHTML = `
+          <td>${item.created_at || "-"}</td>
+          <td>${item.source || "-"}</td>
+          <td>${item.event_type || "-"}</td>
+          <td>${shortText(item.action || "-", 40)}</td>
+          <td>${item.method || "-"}</td>
+          <td><span class="mono">${shortText(item.path || "-", 52)}</span></td>
+          <td>${item.status_code ?? "-"}</td>
+          <td>${item.duration_ms ?? "-"}</td>
+          <td>${okText}</td>
+          <td><span class="mono">${shortText(shortJson(item.detail || {}), 120)}</span></td>
+        `;
+        tr.addEventListener("dblclick", () => {
+          openLogModal(item);
+        });
+        dom.logBody.appendChild(tr);
+      });
+    }
+
+    function openLogModal(item) {
+      dom.logModalContent.textContent = toPretty(item);
+      dom.logModal.classList.add("show");
+      dom.logModal.setAttribute("aria-hidden", "false");
+      setStatus("已打开日志详情", "ok");
+    }
+
+    function closeLogModal() {
+      dom.logModal.classList.remove("show");
+      dom.logModal.setAttribute("aria-hidden", "true");
+    }
+
+    function buildTraceId() {
+      return `ui-${new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 14)}`;
+    }
+
+    function getSelectedDebugApi() {
+      return state.apiCatalog.find((x) => x.endpoint_key === state.selectedDebugApiKey) || null;
+    }
+
+    function isToolCallApi(apiItem) {
+      return Boolean(apiItem && apiItem.method === "POST" && apiItem.path === "/v1/tools/call");
+    }
+
+    function renderDebugApiSelect() {
+      dom.dbgApiKey.innerHTML = "";
+      if (!state.apiCatalog.length) {
+        dom.dbgApiKey.innerHTML = '<option value="">暂无可调试接口</option>';
+        state.selectedDebugApiKey = "";
+        dom.dbgMethod.value = "";
+        dom.dbgPathTemplate.value = "";
+        dom.dbgPath.value = "";
+        dom.dbgBody.value = "{}";
+        dom.dbgToolHelper.style.display = "none";
+        dom.debugApiExample.textContent = "暂无可调试接口。";
+        return;
+      }
+
+      state.apiCatalog.forEach((item) => {
+        const op = document.createElement("option");
+        op.value = item.endpoint_key;
+        op.textContent = `${item.method} ${item.path} | ${item.display_name}`;
+        dom.dbgApiKey.appendChild(op);
+      });
+
+      let selected = state.selectedDebugApiKey;
+      if (!selected || !state.apiCatalog.some((x) => x.endpoint_key === selected)) {
+        const preferred = state.apiCatalog.find((x) => x.path === "/v1/tools/call" && x.method === "POST");
+        selected = preferred ? preferred.endpoint_key : state.apiCatalog[0].endpoint_key;
+      }
+      state.selectedDebugApiKey = selected;
+      dom.dbgApiKey.value = selected;
+      applySelectedApiToDebugForm(false);
+      renderDebugMeta();
+    }
+
+    function applySelectedApiToDebugForm(keepBody = false) {
+      const apiItem = getSelectedDebugApi();
+      if (!apiItem) {
+        return;
+      }
+
+      dom.dbgMethod.value = apiItem.method || "";
+      dom.dbgPathTemplate.value = apiItem.path || "";
+      dom.dbgPath.value = apiItem.path || "";
+      dom.dbgToolHelper.style.display = isToolCallApi(apiItem) ? "" : "none";
+
+      if (!keepBody) {
+        const example = apiItem.request_example ?? {};
+        dom.dbgBody.value = toPretty(example);
+      }
+    }
+
+    function buildToolCallBodyFromHelper() {
+      const toolName = (dom.dbgTool.value || "").trim();
+      if (!toolName) {
+        throw new Error("请选择工具关键字");
+      }
+      const args = safeParseJson(dom.dbgArgs.value, "arguments");
+      const traceId = (dom.dbgTrace.value || "").trim() || buildTraceId();
+      dom.dbgTrace.value = traceId;
+      return {
+        tool_name: toolName,
+        arguments: args,
+        trace_id: traceId,
+        dry_run: false
+      };
+    }
+
+    function renderDebugToolSelect() {
+      const enabled = state.toolCatalog.filter((x) => x.enabled);
+      dom.dbgTool.innerHTML = "";
+
+      if (!enabled.length) {
+        dom.dbgTool.innerHTML = '<option value="">暂无可用工具</option>';
+        state.selectedDebugTool = "";
+        dom.debugToolMeta.textContent = "请先在工具管理中启用工具。";
+        return;
+      }
+
+      enabled.forEach((item) => {
+        const op = document.createElement("option");
+        op.value = item.tool_name;
+        op.textContent = item.tool_name;
+        dom.dbgTool.appendChild(op);
+      });
+
+      const selected = state.selectedDebugTool && enabled.some((x) => x.tool_name === state.selectedDebugTool)
+        ? state.selectedDebugTool
+        : enabled[0].tool_name;
+      dom.dbgTool.value = selected;
+      state.selectedDebugTool = selected;
+      renderDebugMeta();
+    }
+
+    function renderDebugMeta() {
+      const apiItem = getSelectedDebugApi();
+      if (!apiItem) {
+        dom.debugApiExample.textContent = "暂无可调试接口。";
+        dom.debugToolMeta.textContent = "暂无工具信息。";
+        return;
+      }
+
+      dom.debugApiExample.textContent = toPretty({
+        endpoint_key: apiItem.endpoint_key,
+        display_name: apiItem.display_name,
+        endpoint: `${apiItem.method} ${apiItem.path}`,
+        description: apiItem.description || "",
+        request_example: apiItem.request_example ?? "(无需请求体)"
+      });
+
+      if (!isToolCallApi(apiItem)) {
+        dom.debugToolMeta.textContent = "当前接口不是 /v1/tools/call，无需选择工具关键字。";
+        return;
+      }
+
+      const tool = state.toolCatalog.find((x) => x.tool_name === dom.dbgTool.value);
+      if (!tool) {
+        dom.debugToolMeta.textContent = "工具不存在。";
+        return;
+      }
+
+      state.selectedDebugTool = tool.tool_name;
+      dom.debugToolMeta.textContent = toPretty({
+        tool_name: tool.tool_name,
+        description: tool.description || "",
+        enabled: tool.enabled,
+        domain: tool.domain,
+        service: tool.service,
+        strategy: tool.strategy,
+        default_arguments: tool.default_arguments || {}
+      });
+    }
+
+    async function loadApiCatalog(silent = false) {
+      const res = await api("/v1/apis/catalog", { method: "GET" });
+      if (!silent) setOutput("读取 /v1/apis/catalog", res);
+      if (!res.ok) {
+        setStatus(`API管理读取失败(${res.status})`, "err");
+        if (!silent) logUiAction("apis.load", {}, false);
+        return;
+      }
+
+      state.apiCatalog = Array.isArray(res.data.apis)
+        ? res.data.apis.slice().sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
+        : [];
+      renderApiTable();
+      renderDebugApiSelect();
+      dom.apiStorageHint.textContent = `存储: ${res.data.storage || "-"} | DB: ${res.data.db_path || "-"}`;
+      setStatus(`API管理已刷新(${state.apiCatalog.length})`, "ok");
+      if (!silent) logUiAction("apis.load", { count: state.apiCatalog.length }, true);
+    }
+
+    async function loadToolCatalog(silent = false) {
+      const res = await api("/v1/tools/catalog", { method: "GET" });
+      if (!silent) setOutput("读取 /v1/tools/catalog", res);
+      if (!res.ok) {
+        setStatus(`工具管理读取失败(${res.status})`, "err");
+        if (!silent) logUiAction("tools.load", {}, false);
+        return;
+      }
+
+      state.toolCatalog = Array.isArray(res.data.tools)
+        ? res.data.tools.slice().sort((a, b) => String(a.tool_name).localeCompare(String(b.tool_name)))
+        : [];
+      renderToolTable();
+      renderDebugToolSelect();
+      renderDebugMeta();
+      dom.toolStorageHint.textContent = `存储: ${res.data.storage || "-"} | DB: ${res.data.db_path || "-"}`;
+      setStatus(`工具管理已刷新(${state.toolCatalog.length})`, "ok");
+      if (!silent) logUiAction("tools.load", { count: state.toolCatalog.length }, true);
+    }
+
+    async function loadLogs(silent = false) {
+      const limit = Math.max(1, Math.min(Number(dom.logLimit.value || 200), 1000));
+      const params = new URLSearchParams();
+      params.set("limit", String(limit));
+      if (dom.logEventType.value) params.set("event_type", dom.logEventType.value);
+      if (dom.logSource.value) params.set("source", dom.logSource.value);
+
+      const res = await api(`/v1/logs/recent?${params.toString()}`, {
+        method: "GET",
+        headers: headers(false)
+      });
+      if (!silent) setOutput("读取 /v1/logs/recent", res);
+      if (!res.ok) {
+        setStatus(`日志读取失败(${res.status})`, "err");
+        logUiAction("logs.load", { limit, event_type: dom.logEventType.value || "", source: dom.logSource.value || "" }, false);
+        return;
+      }
+
+      state.logs = Array.isArray(res.data.logs) ? res.data.logs : [];
+      renderLogTable();
+      dom.logStorageHint.textContent =
+        `存储: ${res.data.storage || "-"} | 文件: ${res.data.log_path || "-"} | 当前大小: ${res.data.current_size_bytes ?? 0}B | `
+        + `轮转: ${res.data.backup_count ?? "-"} | 保留天数: ${res.data.retention_days ?? "-"} | `
+        + `队列: ${res.data.queue_size ?? "-"} / ${res.data.queue_max ?? "-"} | 丢弃: ${res.data.dropped_count ?? 0}`;
+      setStatus(`日志已刷新(${state.logs.length})`, "ok");
+      logUiAction("logs.load", { limit, event_type: dom.logEventType.value || "", source: dom.logSource.value || "" }, true);
+    }
+
+    function fillSelectedApiExample() {
+      const apiItem = getSelectedDebugApi();
+      if (!apiItem) {
+        setStatus("没有可调试接口", "warn");
+        logUiAction("debug.fill_api_example", {}, false);
+        return;
+      }
+      applySelectedApiToDebugForm(false);
+      setStatus("已填充接口示例", "ok");
+      logUiAction("debug.fill_api_example", { endpoint_key: apiItem.endpoint_key }, true);
+    }
+
+    function useToolDefaults() {
+      const tool = state.toolCatalog.find((x) => x.tool_name === dom.dbgTool.value);
+      if (!tool) {
+        logUiAction("debug.use_tool_defaults", {}, false);
+        return;
+      }
+      dom.dbgArgs.value = toPretty(tool.default_arguments || {});
+      if (!dom.dbgTrace.value.trim()) dom.dbgTrace.value = buildTraceId();
+      setStatus("已填充工具默认参数", "ok");
+      logUiAction("debug.use_tool_defaults", { tool_name: tool.tool_name }, true);
+    }
+
+    function buildToolCallBody() {
+      const apiItem = getSelectedDebugApi();
+      if (!isToolCallApi(apiItem)) {
+        setStatus("当前选择的接口不是 /v1/tools/call", "warn");
+        logUiAction("debug.build_tool_body", {}, false);
+        return;
+      }
+
+      try {
+        const body = buildToolCallBodyFromHelper();
+        dom.dbgBody.value = toPretty(body);
+        setStatus("已生成 tool_call Body", "ok");
+        logUiAction("debug.build_tool_body", { tool_name: body.tool_name }, true);
+      } catch (error) {
+        setStatus(error.message, "warn");
+        logUiAction("debug.build_tool_body", { error: error.message }, false);
+      }
+    }
+
+    async function callApi() {
+      const apiItem = getSelectedDebugApi();
+      if (!apiItem) {
+        setStatus("没有可调试接口", "warn");
+        logUiAction("debug.call_api", {}, false);
+        return;
+      }
+
+      const method = String(dom.dbgMethod.value || apiItem.method || "GET").toUpperCase();
+      let path = (dom.dbgPath.value || dom.dbgPathTemplate.value || apiItem.path || "").trim();
+      if (!path) {
+        setStatus("请求路径不能为空", "warn");
+        logUiAction("debug.call_api", { reason: "path_empty" }, false);
+        return;
+      }
+
+      if (/\{[^}]+\}/.test(path)) {
+        setStatus("请求路径仍包含占位符，请填写真实路径", "warn");
+        setOutput("路径包含占位符", { path });
+        logUiAction("debug.call_api", { method, path, reason: "path_placeholder" }, false);
+        return;
+      }
+
+      const requestInfo = { method, path };
+      const options = { method, headers: {} };
+
+      if (method !== "GET") {
+        let bodyObj;
+        try {
+          bodyObj = safeParseJson(dom.dbgBody.value, "body");
+        } catch (error) {
+          setStatus(error.message, "warn");
+          setOutput("请求体错误", { error: error.message });
+          logUiAction("debug.call_api", { method, path, reason: "body_json_invalid", error: error.message }, false);
+          return;
+        }
+
+        options.headers = headers(true);
+        options.body = JSON.stringify(bodyObj);
+        requestInfo.body = bodyObj;
+      }
+
+      const res = await api(path, options);
+      setOutput(`调试 ${method} ${path}`, { request: requestInfo, response: res });
+
+      if (!res.ok) {
+        setStatus(`调试请求失败(${res.status})`, "err");
+        logUiAction("debug.call_api", { method, path, status: res.status }, false);
+        return;
+      }
+      if (res.data && res.data.success === false) {
+        setStatus("调试完成（业务失败）", "warn");
+        logUiAction("debug.call_api", { method, path, status: res.status, business_success: false }, false);
+      } else {
+        setStatus("调试完成（成功）", "ok");
+        logUiAction("debug.call_api", { method, path, status: res.status, business_success: true }, true);
+      }
+    }
+
+    async function loadConfig(silent = false) {
+      const res = await api("/v1/config/ha", {
+        method: "GET",
+        headers: headers(false)
+      });
+      if (!silent) setOutput("读取 /v1/config/ha", res);
+      if (!res.ok) {
+        setStatus(`配置读取失败(${res.status})`, "warn");
+        if (!silent) logUiAction("config.load", {}, false);
+        return;
+      }
+
+      dom.cfgBase.value = res.data.ha_base_url || "";
+      dom.cfgTimeout.value = res.data.ha_timeout_sec ?? 6;
+      dom.cfgCtxTimeout.value = res.data.ha_context_timeout_sec ?? 8;
+      dom.cfgTokenState.textContent = res.data.ha_token_set
+        ? `Token 状态：已设置（${res.data.ha_token_preview || "已隐藏"}）`
+        : "Token 状态：未设置";
+      if (!silent) logUiAction("config.load", {}, true);
+    }
+
+    async function saveConfig() {
+      const body = {
+        ha_timeout_sec: Number(dom.cfgTimeout.value || 6),
+        ha_context_timeout_sec: Number(dom.cfgCtxTimeout.value || 8)
+      };
+      const baseUrl = (dom.cfgBase.value || "").trim();
+      if (baseUrl) body.ha_base_url = baseUrl;
+      const token = (dom.cfgToken.value || "").trim();
+      if (token) body.ha_token = token;
+
+      const res = await api("/v1/config/ha", {
+        method: "PUT",
+        headers: headers(true),
+        body: JSON.stringify(body)
+      });
+      setOutput("保存 /v1/config/ha", { request: body, response: res });
+
+      if (!res.ok) {
+        setStatus(`配置保存失败(${res.status})`, "err");
+        logUiAction("config.save", { status: res.status }, false);
+        return;
+      }
+
+      dom.cfgToken.value = "";
+      setStatus("配置保存成功", "ok");
+      logUiAction("config.save", { has_token_update: Boolean(token) }, true);
+      await loadConfig(true);
+    }
+
+    async function copyOutput() {
+      try {
+        await navigator.clipboard.writeText(dom.output.textContent || "");
+        setStatus("输出已复制", "ok");
+        logUiAction("output.copy", {}, true);
+      } catch {
+        setStatus("复制失败，请手动复制", "warn");
+        logUiAction("output.copy", {}, false);
+      }
+    }
+
+    async function refreshAll() {
+      setStatus("正在加载数据...", "info");
+      await Promise.all([loadApiCatalog(true), loadToolCatalog(true), loadConfig(true), loadLogs(true)]);
+      setStatus("数据已加载", "ok");
+    }
+
+    function bind() {
+      dom.nav.forEach((x) => {
+        x.onclick = () => switchView(x.dataset.view);
+      });
+
+      dom.btnLoadApis.onclick = () => loadApiCatalog(false);
+      dom.apiSearch.oninput = renderApiTable;
+
+      dom.btnLoadTools.onclick = () => loadToolCatalog(false);
+      dom.toolSearch.oninput = renderToolTable;
+
+      dom.dbgApiKey.onchange = () => {
+        state.selectedDebugApiKey = dom.dbgApiKey.value;
+        applySelectedApiToDebugForm(false);
+        renderDebugMeta();
+        logUiAction("debug.select_api", { endpoint_key: state.selectedDebugApiKey }, true);
+      };
+      dom.dbgTool.onchange = () => {
+        renderDebugMeta();
+        logUiAction("debug.select_tool", { tool_name: dom.dbgTool.value || "" }, true);
+      };
+      dom.btnUseApiExample.onclick = fillSelectedApiExample;
+      dom.btnCallApi.onclick = callApi;
+      dom.btnUseToolDefaults.onclick = useToolDefaults;
+      dom.btnBuildToolCallBody.onclick = buildToolCallBody;
+
+      dom.btnLoadLogs.onclick = () => loadLogs(false);
+      dom.logEventType.onchange = () => loadLogs(true);
+      dom.logSource.onchange = () => loadLogs(true);
+      dom.logLimit.onchange = () => loadLogs(true);
+      dom.btnCloseLogModal.onclick = closeLogModal;
+      dom.logModal.onclick = (event) => {
+        if (event.target === dom.logModal) {
+          closeLogModal();
+        }
+      };
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && dom.logModal.classList.contains("show")) {
+          closeLogModal();
+        }
+      });
+
+      dom.btnLoadConfig.onclick = () => loadConfig(false);
+      dom.btnSaveConfig.onclick = saveConfig;
+
+      dom.btnCopyOutput.onclick = copyOutput;
+      dom.btnClearOutput.onclick = () => {
+        dom.output.textContent = "等待操作...";
+        logUiAction("output.clear", {}, true);
+      };
+    }
+
+    async function init() {
+      dom.dbgTrace.value = buildTraceId();
+
+      bind();
+
+      const lastView = localStorage.getItem(storageKey.view) || "apis";
+      switchView(lastView);
+
+      await refreshAll();
+      setOutput("初始化完成", {
+        message: "UI 已就绪：API管理、工具管理、API调试、日志中心、系统配置。",
+        active_view: state.activeView
+      });
+      logUiAction("ui.init", { active_view: state.activeView }, true);
+    }
+
+    init();
+  </script>
+</body>
+</html>

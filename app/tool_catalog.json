@@ -1,0 +1,102 @@
+{
+  "version": 1,
+  "tools": [
+    {
+      "tool_name": "home.climate.set_temperature",
+      "domain": "climate",
+      "service": "set_temperature",
+      "strategy": "climate_area_temperature",
+      "enabled": true,
+      "description": "Set climate target temperature by area",
+      "default_arguments": {
+        "area": "living_room"
+      }
+    },
+    {
+      "tool_name": "home.climate.turn_off",
+      "domain": "climate",
+      "service": "turn_off",
+      "strategy": "climate_area",
+      "enabled": true,
+      "description": "Turn off climate device by area",
+      "default_arguments": {
+        "area": "living_room"
+      }
+    },
+    {
+      "tool_name": "home.climate.turn_on",
+      "domain": "climate",
+      "service": "turn_on",
+      "strategy": "climate_area",
+      "enabled": true,
+      "description": "Turn on climate device by area",
+      "default_arguments": {
+        "area": "living_room"
+      }
+    },
+    {
+      "tool_name": "home.curtains.close",
+      "domain": "cover",
+      "service": "close_cover",
+      "strategy": "cover_area",
+      "enabled": true,
+      "description": "Close curtains by area",
+      "default_arguments": {
+        "area": "living_room"
+      }
+    },
+    {
+      "tool_name": "home.curtains.open",
+      "domain": "cover",
+      "service": "open_cover",
+      "strategy": "cover_area",
+      "enabled": true,
+      "description": "Open curtains by area",
+      "default_arguments": {
+        "area": "living_room"
+      }
+    },
+    {
+      "tool_name": "home.curtains.stop",
+      "domain": "cover",
+      "service": "stop_cover",
+      "strategy": "cover_area",
+      "enabled": true,
+      "description": "Stop curtains by area",
+      "default_arguments": {
+        "area": "living_room"
+      }
+    },
+    {
+      "tool_name": "home.lights.off",
+      "domain": "auto",
+      "service": "turn_off",
+      "strategy": "light_area",
+      "enabled": true,
+      "description": "Turn off lights by area",
+      "default_arguments": {
+        "area": "living_room"
+      }
+    },
+    {
+      "tool_name": "home.lights.on",
+      "domain": "auto",
+      "service": "turn_on",
+      "strategy": "light_area",
+      "enabled": true,
+      "description": "Turn on lights by area",
+      "default_arguments": {
+        "area": "living_room"
+      }
+    },
+    {
+      "tool_name": "home.scene.activate",
+      "domain": "scene",
+      "service": "turn_on",
+      "strategy": "scene_id",
+      "enabled": true,
+      "description": "Activate a Home Assistant scene entity",
+      "default_arguments": {}
+    }
+  ]
+}
