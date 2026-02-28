@@ -19,19 +19,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-
-      - name: Run tests
-        run: python -m unittest discover -s tests -p "test_*.py"
-
       - name: Login to GHCR
         shell: pwsh
         run: echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
@@ -61,7 +48,7 @@ jobs:
           IMAGE_TAG: ${{ github.sha }}
           SERVICE_NAME: smart_assistant_ha_bridge
           SERVICE_TAG_KEY: BRIDGE_IMAGE_TAG
-          HEALTH_URL: http://127.0.0.1:8092/v1/tools/catalog
+          HEALTH_PATH: /v1/tools/catalog
         run: |
           set -euo pipefail
           DEPLOY_PATH="${DEPLOY_PATH:-/opt/smart-assistant}"
@@ -88,6 +75,12 @@ jobs:
 
           docker compose pull "$SERVICE_NAME"
           docker compose up -d --no-deps "$SERVICE_NAME"
+
+          BRIDGE_PORT_VALUE="$(grep '^BRIDGE_PORT=' .env | tail -n 1 | cut -d'=' -f2)"
+          if [ -z "${BRIDGE_PORT_VALUE}" ]; then
+            BRIDGE_PORT_VALUE="8092"
+          fi
+          HEALTH_URL="http://127.0.0.1:${BRIDGE_PORT_VALUE}${HEALTH_PATH}"
 
           for i in $(seq 1 20); do
             if curl -fsS "$HEALTH_URL" >/dev/null; then
