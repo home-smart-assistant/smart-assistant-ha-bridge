@@ -2,11 +2,13 @@ import asyncio
 import json
 from time import perf_counter
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 from fastapi import HTTPException
 
 from app.core import settings
+from app.core.text_codec import EncodingNormalizationError, normalize_payload, normalize_text
 from app.models.schemas import ToolCallRequest, ToolCallResponse, ToolCatalogItem
 from app.services.catalog_service import get_catalog_snapshot, get_tool_or_raise
 from app.services.config_service import auth_headers
@@ -18,6 +20,96 @@ AREA_CATALOG_TEMPLATE = """{% set out = namespace(items=[]) %}
 {% set out.items = out.items + [{'area_id': a, 'area_name': area_name(a), 'entities': area_entities(a)}] %}
 {% endfor %}
 {{ out.items | to_json }}"""
+
+CANONICAL_AREA_ORDER = ["玄关", "厨房", "客厅", "主卧", "次卧", "餐厅", "书房", "卫生间", "走廊"]
+AREA_NAME_ALIASES: dict[str, tuple[str, ...]] = {
+    "玄关": ("玄关", "xuan_guan", "xuanguan", "entryway", "foyer"),
+    "厨房": ("厨房", "kitchen", "chu_fang", "chufang"),
+    "客厅": ("客厅", "living_room", "living room", "livingroom", "ke_ting", "keting"),
+    "主卧": (
+        "主卧",
+        "主卧室",
+        "bedroom",
+        "master bedroom",
+        "master_bedroom",
+        "zhu_wo",
+        "zhuwo",
+    ),
+    "次卧": (
+        "次卧",
+        "次卧室",
+        "guest bedroom",
+        "guest_bedroom",
+        "second bedroom",
+        "secondary bedroom",
+        "ci_wo",
+        "ciwo",
+    ),
+    "餐厅": ("餐厅", "dining room", "dining_room", "diningroom", "can_ting", "canting"),
+    "书房": ("书房", "study", "shu_fang", "shufang"),
+    "卫生间": ("卫生间", "浴室", "bathroom", "wc", "toilet", "wei_sheng_jian", "weishengjian"),
+    "走廊": ("走廊", "corridor", "hallway", "zou_lang", "zoulang"),
+}
+AREA_CREATE_SEED: dict[str, str] = {
+    "玄关": "xuan_guan",
+    "厨房": "kitchen",
+    "客厅": "living_room",
+    "主卧": "master_bedroom",
+    "次卧": "guest_bedroom",
+    "餐厅": "dining_room",
+    "书房": "study",
+    "卫生间": "bathroom",
+    "走廊": "corridor",
+}
+
+DEFAULT_AREA_AUDIT_DOMAINS = ("light", "switch", "climate", "cover", "fan")
+DEFAULT_AREA_ASSIGN_MAX_UPDATES = 200
+AREA_AUDIT_IGNORED_ENTITY_PREFIXES = (
+    "switch.zigbee2mqtt_bridge_",
+)
+AREA_AUDIT_SUGGESTION_ALIASES: dict[str, tuple[str, ...]] = {
+    "玄关": ("玄关", "xuan_guan", "xuanguan", "entryway", "foyer"),
+    "厨房": ("厨房", "kitchen", "chu_fang", "chufang"),
+    "客厅": ("客厅", "living_room", "living room", "livingroom", "ke_ting", "keting"),
+    "主卧": (
+        "主卧",
+        "主卧室",
+        "master bedroom",
+        "master_bedroom",
+        "bedroom",
+        "zhu_wo",
+        "zhuwo",
+    ),
+    "次卧": (
+        "次卧",
+        "次卧室",
+        "guest bedroom",
+        "guest_bedroom",
+        "second bedroom",
+        "ci_wo",
+        "ciwo",
+    ),
+    "餐厅": ("餐厅", "dining room", "dining_room", "diningroom", "can_ting", "canting"),
+    "书房": ("书房", "study", "shu_fang", "shufang"),
+    "卫生间": ("卫生间", "浴室", "bathroom", "wc", "toilet", "wei_sheng_jian", "weishengjian"),
+    "走廊": ("走廊", "corridor", "hallway", "zou_lang", "zoulang"),
+}
+ENTITY_TYPE_DOMAIN_CANDIDATES: dict[str, tuple[str, ...]] = {
+    "light": ("light", "switch"),
+    "climate": ("climate",),
+    "cover": ("cover",),
+}
+LIGHT_SWITCH_HINTS = (
+    "deng",
+    "light",
+    "lamp",
+    "lighting",
+    "zhao_ming",
+    "zhaoming",
+)
+LIGHT_EXCLUDE_HINTS = (
+    "indicator",
+)
 
 
 async def execute_ha_service_call(
@@ -208,8 +300,22 @@ async def execute_ha_service_call(
 
 
 async def execute_tool_call(req: ToolCallRequest) -> ToolCallResponse:
-    item = get_tool_or_raise(req.tool_name)
-    service_data = resolve_service_data(item, req.arguments)
+    trace_id = req.trace_id
+    normalized_tool_name = _normalize_text_or_raise(req.tool_name, field_path="tool_name", trace_id=trace_id)
+    normalized_arguments = _normalize_payload_or_raise(req.arguments, field_path="arguments", trace_id=trace_id)
+
+    item = get_tool_or_raise(normalized_tool_name)
+    if item.strategy == "area_sync":
+        req = req.model_copy(update={"tool_name": normalized_tool_name, "arguments": normalized_arguments})
+        return await _execute_area_sync_tool(req, item)
+    if item.strategy == "area_audit":
+        req = req.model_copy(update={"tool_name": normalized_tool_name, "arguments": normalized_arguments})
+        return await _execute_area_audit_tool(req, item)
+    if item.strategy == "area_assign":
+        req = req.model_copy(update={"tool_name": normalized_tool_name, "arguments": normalized_arguments})
+        return await _execute_area_assign_tool(req, item)
+
+    service_data = await resolve_service_data(item, normalized_arguments)
     domain = resolve_domain(item, service_data)
     return await execute_ha_service_call(
         tool_name=item.tool_name,
@@ -219,6 +325,1369 @@ async def execute_tool_call(req: ToolCallRequest) -> ToolCallResponse:
         service_data=service_data,
         trace_id=req.trace_id,
         dry_run=req.dry_run,
+    )
+
+
+def _encoding_error_to_http(ex: EncodingNormalizationError) -> HTTPException:
+    return HTTPException(status_code=400, detail=ex.to_error_detail())
+
+
+def _sample_text(value: Any) -> str:
+    text = str(value or "")
+    if len(text) <= 80:
+        return text
+    return f"{text[:77]}..."
+
+
+def _log_encoding_repair(
+    *,
+    trace_id: str | None,
+    field_path: str,
+    original: Any,
+    normalized: Any,
+) -> None:
+    if original == normalized:
+        return
+    log_operation(
+        event_type="text_encoding",
+        source="system",
+        action="text.encoding.repair",
+        trace_id=trace_id,
+        success=True,
+        detail={
+            "field": field_path,
+            "before_sample": _sample_text(original),
+            "after_sample": _sample_text(normalized),
+        },
+    )
+
+
+def _log_encoding_reject(*, trace_id: str | None, ex: EncodingNormalizationError) -> None:
+    log_operation(
+        event_type="text_encoding",
+        source="system",
+        action="text.encoding.reject",
+        trace_id=trace_id,
+        success=False,
+        detail=ex.to_error_detail(),
+    )
+
+
+def _normalize_text_or_raise(value: Any, *, field_path: str, trace_id: str | None) -> str:
+    raw = str(value or "")
+    try:
+        normalized = normalize_text(raw, field_path=field_path, strict=settings.TEXT_ENCODING_STRICT)
+    except EncodingNormalizationError as ex:
+        _log_encoding_reject(trace_id=trace_id, ex=ex)
+        raise _encoding_error_to_http(ex) from ex
+    _log_encoding_repair(trace_id=trace_id, field_path=field_path, original=raw, normalized=normalized)
+    return normalized
+
+
+def _normalize_payload_or_raise(value: Any, *, field_path: str, trace_id: str | None) -> Any:
+    try:
+        normalized = normalize_payload(value, field_path=field_path, strict=settings.TEXT_ENCODING_STRICT)
+    except EncodingNormalizationError as ex:
+        _log_encoding_reject(trace_id=trace_id, ex=ex)
+        raise _encoding_error_to_http(ex) from ex
+    _log_encoding_repair(trace_id=trace_id, field_path=field_path, original=value, normalized=normalized)
+    return normalized
+
+
+def _string_or_empty(raw: Any) -> str:
+    return raw.strip() if isinstance(raw, str) else ""
+
+
+def _normalize_area_label(raw: Any) -> str:
+    text = str(raw or "").strip().lower()
+    return text.replace(" ", "").replace("_", "").replace("-", "").replace("/", "")
+
+
+def _canonical_area_name(raw: Any) -> str:
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    normalized = _normalize_area_label(text)
+    for name, aliases in AREA_NAME_ALIASES.items():
+        alias_norm = {_normalize_area_label(alias) for alias in aliases}
+        if normalized in alias_norm:
+            return name
+    return text
+
+
+def _iter_area_lookup_candidates(raw: Any) -> list[str]:
+    text = str(raw or "").strip()
+    if not text:
+        return ["living_room", "客厅"]
+
+    candidates: list[str] = []
+    seen: set[str] = set()
+
+    def add(value: Any) -> None:
+        candidate = str(value or "").strip()
+        key = _normalize_area_label(candidate)
+        if not key or key in seen:
+            return
+        seen.add(key)
+        candidates.append(candidate)
+
+    add(text)
+    canonical = _canonical_area_name(text)
+    if canonical:
+        add(canonical)
+        seed = AREA_CREATE_SEED.get(canonical)
+        if seed:
+            add(seed)
+        for alias in AREA_NAME_ALIASES.get(canonical, ()):
+            add(alias)
+
+    return candidates
+
+
+def _find_entity_for_area_map(
+    area_map: dict[str, str | list[str]],
+    *,
+    area_candidates: list[str],
+) -> str | list[str] | None:
+    if not area_map:
+        return None
+
+    normalized_map: dict[str, str | list[str]] = {}
+    for key, value in area_map.items():
+        normalized = _normalize_area_label(key)
+        if not normalized:
+            continue
+        normalized_map[normalized] = value
+
+    for area in area_candidates:
+        normalized = _normalize_area_label(area)
+        if not normalized:
+            continue
+        raw_entity = normalized_map.get(normalized)
+        parsed = parse_entity_ids(raw_entity)
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _collect_area_match_tokens(*, area_id: str, area_name: str) -> set[str]:
+    tokens: set[str] = set()
+    for value in (area_id, area_name):
+        normalized = _normalize_area_label(value)
+        if normalized:
+            tokens.add(normalized)
+
+    canonical = _canonical_area_name(area_name) or _canonical_area_name(area_id)
+    if canonical:
+        canonical_norm = _normalize_area_label(canonical)
+        if canonical_norm:
+            tokens.add(canonical_norm)
+        seed = AREA_CREATE_SEED.get(canonical)
+        if seed:
+            seed_norm = _normalize_area_label(seed)
+            if seed_norm:
+                tokens.add(seed_norm)
+        for alias in AREA_NAME_ALIASES.get(canonical, ()):
+            alias_norm = _normalize_area_label(alias)
+            if alias_norm:
+                tokens.add(alias_norm)
+
+    return tokens
+
+
+def _filter_entities_by_type(entity_ids: list[str], *, entity_type: str) -> list[str]:
+    allowed_domains = set(ENTITY_TYPE_DOMAIN_CANDIDATES.get(entity_type, (entity_type,)))
+    filtered: list[str] = []
+    for entity_id in entity_ids:
+        value = str(entity_id).strip()
+        if "." not in value:
+            continue
+        domain = value.split(".", 1)[0].strip().lower()
+        if domain in allowed_domains:
+            normalized = _normalize_area_label(value)
+            if entity_type == "light" and domain == "switch":
+                if not any(token in normalized for token in LIGHT_SWITCH_HINTS):
+                    continue
+            if entity_type == "light" and any(token in normalized for token in LIGHT_EXCLUDE_HINTS):
+                continue
+            filtered.append(value)
+    return list(dict.fromkeys(filtered))
+
+
+async def _resolve_entities_from_ha_area(
+    *,
+    entity_type: str,
+    area_candidates: list[str],
+) -> str | list[str] | None:
+    candidate_norms = {_normalize_area_label(item) for item in area_candidates if _normalize_area_label(item)}
+    if not candidate_norms:
+        return None
+
+    try:
+        areas_result = await get_ha_areas(include_state_validation=False)
+    except Exception:
+        return None
+
+    rows = areas_result.get("areas", [])
+    if not isinstance(rows, list):
+        return None
+
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        area_id = str(row.get("area_id", "")).strip()
+        area_name = str(row.get("area_name", "")).strip() or area_id
+        if not area_id:
+            continue
+        row_tokens = _collect_area_match_tokens(area_id=area_id, area_name=area_name)
+        if not row_tokens.intersection(candidate_norms):
+            continue
+
+        source = row.get("ha_entities")
+        if not isinstance(source, list) or not source:
+            source = row.get("entities")
+        entity_ids = _to_entity_id_list(source)
+        matched = _filter_entities_by_type(entity_ids, entity_type=entity_type)
+        parsed = parse_entity_ids(matched)
+        if parsed is not None:
+            return parsed
+
+    return None
+
+
+def _normalize_target_areas(raw: Any) -> list[str]:
+    values: list[str] = []
+    if isinstance(raw, str):
+        values = [item.strip() for item in raw.replace("，", ",").split(",") if item.strip()]
+    elif isinstance(raw, (list, tuple, set)):
+        values = [str(item).strip() for item in raw if str(item).strip()]
+
+    if not values:
+        values = list(CANONICAL_AREA_ORDER)
+
+    canonical = [_canonical_area_name(item) for item in values if _canonical_area_name(item)]
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for item in canonical:
+        key = _normalize_area_label(item)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return deduped
+
+
+def _as_bool(raw: Any, default: bool) -> bool:
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, str):
+        normalized = raw.strip().lower()
+        if normalized in {"1", "true", "yes", "y", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "n", "off"}:
+            return False
+    return default
+
+
+def _normalize_domains(raw: Any) -> list[str]:
+    values: list[str] = []
+    if isinstance(raw, str):
+        values = [item.strip().lower() for item in raw.split(",") if item.strip()]
+    elif isinstance(raw, (list, tuple, set)):
+        values = [str(item).strip().lower() for item in raw if str(item).strip()]
+    deduped = list(dict.fromkeys(values))
+    if deduped:
+        return deduped
+    return list(DEFAULT_AREA_AUDIT_DOMAINS)
+
+
+def _is_area_audit_ignored_entity(entity_id: str) -> bool:
+    normalized = str(entity_id or "").strip().lower()
+    if not normalized:
+        return False
+    return any(normalized.startswith(prefix) for prefix in AREA_AUDIT_IGNORED_ENTITY_PREFIXES)
+
+
+def _to_clamped_int(raw: Any, *, default: int, minimum: int, maximum: int) -> int:
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return default
+    return max(minimum, min(maximum, value))
+
+
+def _build_area_suggestion_tokens(area_name: str) -> set[str]:
+    tokens: set[str] = set()
+    normalized_area = _normalize_area_label(area_name)
+    if normalized_area:
+        tokens.add(normalized_area)
+
+    lower = str(area_name or "").strip().lower()
+    for chunk in lower.replace("-", " ").replace("/", " ").replace("_", " ").split():
+        normalized = _normalize_area_label(chunk)
+        if len(normalized) >= 2:
+            tokens.add(normalized)
+
+    for canonical, aliases in AREA_AUDIT_SUGGESTION_ALIASES.items():
+        alias_tokens = {_normalize_area_label(canonical)}
+        alias_tokens.update(_normalize_area_label(alias) for alias in aliases)
+        if normalized_area in alias_tokens:
+            tokens.update(token for token in alias_tokens if len(token) >= 2)
+            break
+
+    return {token for token in tokens if len(token) >= 2}
+
+
+def _suggest_area_for_entity(
+    *,
+    entity_id: str,
+    friendly_name: str,
+    target_areas: list[str],
+) -> tuple[str | None, str | None]:
+    corpus = _normalize_area_label(f"{friendly_name} {entity_id}")
+    if not corpus:
+        return None, None
+
+    best_area: str | None = None
+    best_token: str | None = None
+    best_score = 0
+    best_token_len = 0
+
+    for area_name in target_areas:
+        tokens = sorted(_build_area_suggestion_tokens(area_name), key=len, reverse=True)
+        matched = [token for token in tokens if token and token in corpus]
+        if not matched:
+            continue
+        score = sum(len(token) for token in matched)
+        token_len = len(matched[0])
+        if score > best_score or (score == best_score and token_len > best_token_len):
+            best_area = area_name
+            best_token = matched[0]
+            best_score = score
+            best_token_len = token_len
+
+    return best_area, best_token
+
+
+def _ha_websocket_url(base_url: str) -> str:
+    parsed = urlparse((base_url or "").strip().rstrip("/"))
+    scheme = "wss" if parsed.scheme == "https" else "ws"
+    netloc = parsed.netloc or parsed.path
+    return f"{scheme}://{netloc}/api/websocket"
+
+
+async def _ha_ws_send_command(ws: Any, request_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+    message = dict(payload)
+    message["id"] = request_id
+    await ws.send(json.dumps(message, ensure_ascii=False))
+    while True:
+        raw = await ws.recv()
+        data = json.loads(raw)
+        if data.get("type") == "event":
+            continue
+        if data.get("id") == request_id:
+            return data
+
+
+def _area_rows_from_ws_list(raw_rows: Any) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    if not isinstance(raw_rows, list):
+        return rows
+    for row in raw_rows:
+        if not isinstance(row, dict):
+            continue
+        area_id = str(row.get("area_id", "")).strip()
+        if not area_id:
+            continue
+        name = str(row.get("name", "")).strip() or area_id
+        rows.append({"area_id": area_id, "name": name})
+    return rows
+
+
+def _find_area_by_name(rows: list[dict[str, str]], target_name: str, *, used_ids: set[str]) -> dict[str, str] | None:
+    target_norm = _normalize_area_label(target_name)
+    for row in rows:
+        if row["area_id"] in used_ids:
+            continue
+        if _normalize_area_label(row["name"]) == target_norm:
+            return row
+    return None
+
+
+def _find_area_by_alias(rows: list[dict[str, str]], target_name: str, *, used_ids: set[str]) -> dict[str, str] | None:
+    aliases = AREA_NAME_ALIASES.get(target_name, ())
+    alias_norm = {_normalize_area_label(item) for item in aliases}
+    if not alias_norm:
+        return None
+    for row in rows:
+        if row["area_id"] in used_ids:
+            continue
+        if _normalize_area_label(row["name"]) in alias_norm:
+            return row
+        if _normalize_area_label(row["area_id"]) in alias_norm:
+            return row
+    return None
+
+
+async def _build_area_entity_count() -> dict[str, int]:
+    result = await get_ha_areas(include_state_validation=False)
+    rows = result.get("areas", [])
+    if not isinstance(rows, list):
+        return {}
+
+    counts: dict[str, int] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        area_id = str(row.get("area_id", "")).strip()
+        if not area_id:
+            continue
+        ha_entities = row.get("ha_entities")
+        entities = row.get("entities")
+        source = ha_entities if isinstance(ha_entities, list) and ha_entities else entities
+        if not isinstance(source, list):
+            counts[area_id] = 0
+            continue
+        counts[area_id] = len([item for item in source if isinstance(item, str) and item.strip()])
+    return counts
+
+
+def _build_area_lookup(area_rows: list[dict[str, Any]]) -> dict[str, str]:
+    lookup: dict[str, str] = {}
+    for row in area_rows:
+        if not isinstance(row, dict):
+            continue
+        area_id = str(row.get("area_id", "")).strip()
+        area_name = str(row.get("area_name", "")).strip()
+        if not area_id:
+            continue
+        lookup[_normalize_area_label(area_id)] = area_id
+        if area_name:
+            lookup[_normalize_area_label(area_name)] = area_id
+            canonical = _canonical_area_name(area_name)
+            if canonical:
+                lookup[_normalize_area_label(canonical)] = area_id
+                for alias in AREA_NAME_ALIASES.get(canonical, ()):
+                    lookup[_normalize_area_label(alias)] = area_id
+    return lookup
+
+
+def _resolve_area_id_from_lookup(area_lookup: dict[str, str], area_input: Any) -> str | None:
+    for candidate in _iter_area_lookup_candidates(area_input):
+        area_id = area_lookup.get(_normalize_area_label(candidate))
+        if area_id:
+            return area_id
+    return None
+
+
+async def _execute_area_sync_tool(req: ToolCallRequest, item: ToolCatalogItem) -> ToolCallResponse:
+    merged = dict(item.default_arguments)
+    merged.update(req.arguments or {})
+    merged = _normalize_payload_or_raise(merged, field_path="arguments", trace_id=req.trace_id)
+    target_areas = merged.get("target_areas", [])
+    delete_unused = _as_bool(merged.get("delete_unused"), True)
+    force_delete_in_use = _as_bool(merged.get("force_delete_in_use"), False)
+    return await sync_ha_areas(
+        target_areas=target_areas,
+        delete_unused=delete_unused,
+        force_delete_in_use=force_delete_in_use,
+        trace_id=req.trace_id,
+        dry_run=req.dry_run,
+    )
+
+
+async def _execute_area_audit_tool(req: ToolCallRequest, item: ToolCatalogItem) -> ToolCallResponse:
+    merged = dict(item.default_arguments)
+    merged.update(req.arguments or {})
+    merged = _normalize_payload_or_raise(merged, field_path="arguments", trace_id=req.trace_id)
+    target_areas = merged.get("target_areas", [])
+    domains = merged.get("domains", [])
+    include_unavailable = _as_bool(merged.get("include_unavailable"), False)
+    return await audit_ha_areas(
+        target_areas=target_areas,
+        domains=domains,
+        include_unavailable=include_unavailable,
+        trace_id=req.trace_id,
+        dry_run=req.dry_run,
+    )
+
+
+async def _execute_area_assign_tool(req: ToolCallRequest, item: ToolCatalogItem) -> ToolCallResponse:
+    merged = dict(item.default_arguments)
+    merged.update(req.arguments or {})
+    merged = _normalize_payload_or_raise(merged, field_path="arguments", trace_id=req.trace_id)
+    target_areas = merged.get("target_areas", [])
+    domains = merged.get("domains", [])
+    include_unavailable = _as_bool(merged.get("include_unavailable"), False)
+    only_with_suggestion = _as_bool(merged.get("only_with_suggestion"), True)
+    max_updates = _to_clamped_int(
+        merged.get("max_updates"),
+        default=DEFAULT_AREA_ASSIGN_MAX_UPDATES,
+        minimum=1,
+        maximum=2000,
+    )
+    return await assign_ha_areas(
+        target_areas=target_areas,
+        domains=domains,
+        include_unavailable=include_unavailable,
+        only_with_suggestion=only_with_suggestion,
+        max_updates=max_updates,
+        trace_id=req.trace_id,
+        dry_run=req.dry_run,
+    )
+
+
+async def assign_ha_areas(
+    *,
+    target_areas: list[str],
+    domains: list[str] | str | None = None,
+    include_unavailable: bool = False,
+    only_with_suggestion: bool = True,
+    max_updates: int = DEFAULT_AREA_ASSIGN_MAX_UPDATES,
+    trace_id: str | None = None,
+    dry_run: bool = False,
+) -> ToolCallResponse:
+    normalized_target_input = _normalize_payload_or_raise(target_areas, field_path="target_areas", trace_id=trace_id)
+    normalized_domain_input = _normalize_payload_or_raise(domains, field_path="domains", trace_id=trace_id)
+    normalized_targets = _normalize_target_areas(normalized_target_input)
+    if not normalized_targets:
+        return ToolCallResponse(success=False, message="target_areas is required", trace_id=trace_id)
+
+    if not settings.HA_TOKEN:
+        return ToolCallResponse(success=False, message="HA token missing", trace_id=trace_id)
+
+    normalized_domains = _normalize_domains(normalized_domain_input)
+    safe_max_updates = _to_clamped_int(max_updates, default=DEFAULT_AREA_ASSIGN_MAX_UPDATES, minimum=1, maximum=2000)
+
+    # Run audit first to get unassigned candidates and suggestions.
+    audit_result = await audit_ha_areas(
+        target_areas=normalized_targets,
+        domains=normalized_domains,
+        include_unavailable=include_unavailable,
+        trace_id=trace_id,
+        dry_run=True,
+    )
+    audit_detail = audit_result.data if isinstance(audit_result.data, dict) else {}
+    unassigned_rows = audit_detail.get("unassigned_entities", [])
+    if not isinstance(unassigned_rows, list):
+        unassigned_rows = []
+
+    candidates: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    for row in unassigned_rows:
+        if not isinstance(row, dict):
+            continue
+        entity_id = str(row.get("entity_id", "")).strip()
+        suggested_area = _string_or_empty(row.get("suggested_area"))
+        if not entity_id:
+            continue
+        if only_with_suggestion and not suggested_area:
+            skipped.append(
+                {
+                    "entity_id": entity_id,
+                    "reason": "no_suggestion",
+                    "suggested_area": None,
+                }
+            )
+            continue
+        candidates.append(
+            {
+                "entity_id": entity_id,
+                "suggested_area": suggested_area or None,
+                "domain": row.get("domain"),
+                "reason": row.get("reason"),
+            }
+        )
+
+    if safe_max_updates < len(candidates):
+        for row in candidates[safe_max_updates:]:
+            skipped.append(
+                {
+                    "entity_id": row.get("entity_id"),
+                    "reason": "limit_exceeded",
+                    "suggested_area": row.get("suggested_area"),
+                }
+            )
+        candidates = candidates[:safe_max_updates]
+
+    areas_result = await get_ha_areas(include_state_validation=False)
+    area_rows = areas_result.get("areas", []) if isinstance(areas_result.get("areas"), list) else []
+    area_lookup = _build_area_lookup(area_rows)
+
+    if not candidates:
+        detail = {
+            "target_areas": normalized_targets,
+            "domains": sorted(set(normalized_domains)),
+            "include_unavailable": include_unavailable,
+            "only_with_suggestion": only_with_suggestion,
+            "max_updates": safe_max_updates,
+            "dry_run": dry_run,
+            "candidate_count": 0,
+            "planned_count": 0,
+            "updated_count": 0,
+            "failed_count": 0,
+            "skipped_count": len(skipped),
+            "planned_updates": [],
+            "updated": [],
+            "failed": [],
+            "skipped": skipped,
+            "errors": [],
+            "audit": {
+                "unassigned_entity_count": audit_detail.get("unassigned_entity_count"),
+                "suggested_assignment_count": audit_detail.get("suggested_assignment_count"),
+                "scanned_entity_count": audit_detail.get("scanned_entity_count"),
+            },
+        }
+        log_operation(
+            event_type="ha_area_assign",
+            source="system",
+            action="ha.areas.assign",
+            trace_id=trace_id,
+            success=True,
+            detail=detail,
+        )
+        return ToolCallResponse(success=True, message="no area assignment needed", trace_id=trace_id, data=detail)
+
+    try:
+        import websockets
+    except Exception as ex:
+        return ToolCallResponse(success=False, message=f"websocket dependency missing: {ex}", trace_id=trace_id)
+
+    started = perf_counter()
+    planned_updates: list[dict[str, Any]] = []
+    updated: list[dict[str, Any]] = []
+    failed: list[dict[str, Any]] = []
+    errors: list[str] = []
+
+    try:
+        async with websockets.connect(
+            _ha_websocket_url(settings.HA_BASE_URL),
+            open_timeout=settings.HA_CONTEXT_TIMEOUT_SEC,
+            close_timeout=5,
+            max_size=4_000_000,
+        ) as ws:
+            first = json.loads(await ws.recv())
+            if first.get("type") != "auth_required":
+                return ToolCallResponse(
+                    success=False,
+                    message=f"unexpected websocket handshake: {first.get('type')}",
+                    trace_id=trace_id,
+                )
+
+            await ws.send(json.dumps({"type": "auth", "access_token": settings.HA_TOKEN}, ensure_ascii=False))
+            second = json.loads(await ws.recv())
+            if second.get("type") != "auth_ok":
+                return ToolCallResponse(
+                    success=False,
+                    message=f"websocket auth failed: {second}",
+                    trace_id=trace_id,
+                )
+
+            request_id = 1
+            entity_registry_resp = await _ha_ws_send_command(ws, request_id, {"type": "config/entity_registry/list"})
+            request_id += 1
+            registry_rows = entity_registry_resp.get("result", [])
+            registry_by_entity: dict[str, dict[str, Any]] = {}
+            if isinstance(registry_rows, list):
+                for row in registry_rows:
+                    if not isinstance(row, dict):
+                        continue
+                    entity_id = str(row.get("entity_id", "")).strip()
+                    if entity_id:
+                        registry_by_entity[entity_id] = row
+
+            for row in candidates:
+                entity_id = str(row.get("entity_id", "")).strip()
+                suggested_area = _string_or_empty(row.get("suggested_area"))
+                if not entity_id:
+                    continue
+                if not suggested_area:
+                    skipped.append({"entity_id": entity_id, "reason": "no_suggestion", "suggested_area": None})
+                    continue
+
+                area_id = area_lookup.get(_normalize_area_label(suggested_area))
+                if not area_id:
+                    skipped.append(
+                        {
+                            "entity_id": entity_id,
+                            "reason": "suggested_area_not_found",
+                            "suggested_area": suggested_area,
+                        }
+                    )
+                    continue
+
+                registry_row = registry_by_entity.get(entity_id, {})
+                current_area_id = str(registry_row.get("area_id") or "").strip() if isinstance(registry_row, dict) else ""
+                if current_area_id and _normalize_area_label(current_area_id) == _normalize_area_label(area_id):
+                    skipped.append(
+                        {
+                            "entity_id": entity_id,
+                            "reason": "already_assigned",
+                            "suggested_area": suggested_area,
+                            "area_id": area_id,
+                        }
+                    )
+                    continue
+
+                planned_item = {
+                    "entity_id": entity_id,
+                    "area_id": area_id,
+                    "area_name": suggested_area,
+                    "from_area_id": current_area_id or None,
+                }
+                planned_updates.append(planned_item)
+
+                if dry_run:
+                    continue
+
+                update_resp = await _ha_ws_send_command(
+                    ws,
+                    request_id,
+                    {
+                        "type": "config/entity_registry/update",
+                        "entity_id": entity_id,
+                        "area_id": area_id,
+                    },
+                )
+                request_id += 1
+                if update_resp.get("success"):
+                    updated.append(planned_item)
+                    if isinstance(registry_row, dict):
+                        registry_row["area_id"] = area_id
+                    continue
+
+                error_message = str(update_resp.get("error", {}).get("message", "unknown")).strip() or "unknown"
+                failed.append(
+                    {
+                        "entity_id": entity_id,
+                        "area_id": area_id,
+                        "area_name": suggested_area,
+                        "error": error_message,
+                    }
+                )
+                errors.append(f"assign_failed:{entity_id}:{error_message}")
+    except Exception as ex:
+        errors.append(str(ex))
+
+    duration_ms = round((perf_counter() - started) * 1000, 2)
+    success = not errors
+    detail = {
+        "target_areas": normalized_targets,
+        "domains": sorted(set(normalized_domains)),
+        "include_unavailable": include_unavailable,
+        "only_with_suggestion": only_with_suggestion,
+        "max_updates": safe_max_updates,
+        "dry_run": dry_run,
+        "candidate_count": len(candidates),
+        "planned_count": len(planned_updates),
+        "updated_count": len(updated),
+        "failed_count": len(failed),
+        "skipped_count": len(skipped),
+        "planned_updates": planned_updates,
+        "updated": updated,
+        "failed": failed,
+        "skipped": skipped,
+        "errors": errors,
+        "audit": {
+            "unassigned_entity_count": audit_detail.get("unassigned_entity_count"),
+            "suggested_assignment_count": audit_detail.get("suggested_assignment_count"),
+            "scanned_entity_count": audit_detail.get("scanned_entity_count"),
+        },
+    }
+
+    log_operation(
+        event_type="ha_area_assign",
+        source="system",
+        action="ha.areas.assign",
+        trace_id=trace_id,
+        success=success,
+        duration_ms=duration_ms,
+        detail=detail,
+    )
+
+    message = "HA area assignment completed" if success else "HA area assignment completed with errors"
+    return ToolCallResponse(success=success, message=message, trace_id=trace_id, data=detail)
+
+
+async def reassign_ha_entities(
+    *,
+    assignments: list[dict[str, Any]],
+    trace_id: str | None = None,
+    dry_run: bool = False,
+) -> ToolCallResponse:
+    normalized_input = _normalize_payload_or_raise(assignments, field_path="assignments", trace_id=trace_id)
+    if not isinstance(normalized_input, list) or not normalized_input:
+        return ToolCallResponse(success=False, message="assignments is required", trace_id=trace_id)
+
+    if not settings.HA_TOKEN:
+        return ToolCallResponse(success=False, message="HA token missing", trace_id=trace_id)
+
+    areas_result = await get_ha_areas(include_state_validation=False)
+    area_rows = areas_result.get("areas", []) if isinstance(areas_result.get("areas"), list) else []
+    area_lookup = _build_area_lookup(area_rows)
+
+    normalized_assignments: list[dict[str, str]] = []
+    failed: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    errors: list[str] = []
+
+    for row in normalized_input:
+        if not isinstance(row, dict):
+            continue
+        entity_id = str(row.get("entity_id", "")).strip()
+        area_raw = row.get("area")
+        if not entity_id:
+            failed.append({"entity_id": None, "area": area_raw, "error": "entity_id_required"})
+            continue
+
+        area_id = _resolve_area_id_from_lookup(area_lookup, area_raw)
+        if not area_id:
+            failed.append({"entity_id": entity_id, "area": area_raw, "error": "area_not_found"})
+            continue
+
+        normalized_assignments.append({"entity_id": entity_id, "area_id": area_id})
+
+    if not normalized_assignments and not failed:
+        return ToolCallResponse(success=False, message="no valid assignment payload", trace_id=trace_id)
+
+    try:
+        import websockets
+    except Exception as ex:
+        return ToolCallResponse(success=False, message=f"websocket dependency missing: {ex}", trace_id=trace_id)
+
+    started = perf_counter()
+    planned_updates: list[dict[str, Any]] = []
+    updated: list[dict[str, Any]] = []
+
+    try:
+        async with websockets.connect(
+            _ha_websocket_url(settings.HA_BASE_URL),
+            open_timeout=settings.HA_CONTEXT_TIMEOUT_SEC,
+            close_timeout=5,
+            max_size=4_000_000,
+        ) as ws:
+            first = json.loads(await ws.recv())
+            if first.get("type") != "auth_required":
+                return ToolCallResponse(
+                    success=False,
+                    message=f"unexpected websocket handshake: {first.get('type')}",
+                    trace_id=trace_id,
+                )
+
+            await ws.send(json.dumps({"type": "auth", "access_token": settings.HA_TOKEN}, ensure_ascii=False))
+            second = json.loads(await ws.recv())
+            if second.get("type") != "auth_ok":
+                return ToolCallResponse(
+                    success=False,
+                    message=f"websocket auth failed: {second}",
+                    trace_id=trace_id,
+                )
+
+            request_id = 1
+            entity_registry_resp = await _ha_ws_send_command(ws, request_id, {"type": "config/entity_registry/list"})
+            request_id += 1
+            registry_rows = entity_registry_resp.get("result", [])
+            registry_by_entity: dict[str, dict[str, Any]] = {}
+            if isinstance(registry_rows, list):
+                for row in registry_rows:
+                    if not isinstance(row, dict):
+                        continue
+                    entity_id = str(row.get("entity_id", "")).strip()
+                    if entity_id:
+                        registry_by_entity[entity_id] = row
+
+            for row in normalized_assignments:
+                entity_id = row["entity_id"]
+                area_id = row["area_id"]
+                registry_row = registry_by_entity.get(entity_id)
+                if not isinstance(registry_row, dict):
+                    failed.append({"entity_id": entity_id, "area_id": area_id, "error": "entity_not_found"})
+                    continue
+
+                current_area_id = str(registry_row.get("area_id") or "").strip()
+                if current_area_id and _normalize_area_label(current_area_id) == _normalize_area_label(area_id):
+                    skipped.append(
+                        {
+                            "entity_id": entity_id,
+                            "area_id": area_id,
+                            "reason": "already_assigned",
+                        }
+                    )
+                    continue
+
+                planned_item = {
+                    "entity_id": entity_id,
+                    "area_id": area_id,
+                    "from_area_id": current_area_id or None,
+                }
+                planned_updates.append(planned_item)
+                if dry_run:
+                    continue
+
+                update_resp = await _ha_ws_send_command(
+                    ws,
+                    request_id,
+                    {
+                        "type": "config/entity_registry/update",
+                        "entity_id": entity_id,
+                        "area_id": area_id,
+                    },
+                )
+                request_id += 1
+                if update_resp.get("success"):
+                    updated.append(planned_item)
+                    registry_row["area_id"] = area_id
+                    continue
+
+                error_message = str(update_resp.get("error", {}).get("message", "unknown")).strip() or "unknown"
+                failed.append(
+                    {
+                        "entity_id": entity_id,
+                        "area_id": area_id,
+                        "error": error_message,
+                    }
+                )
+                errors.append(f"assign_failed:{entity_id}:{error_message}")
+    except Exception as ex:
+        errors.append(str(ex))
+
+    duration_ms = round((perf_counter() - started) * 1000, 2)
+    success = not errors and not failed
+    detail = {
+        "dry_run": dry_run,
+        "input_count": len(normalized_input),
+        "valid_assignment_count": len(normalized_assignments),
+        "planned_count": len(planned_updates),
+        "updated_count": len(updated),
+        "failed_count": len(failed),
+        "skipped_count": len(skipped),
+        "planned_updates": planned_updates,
+        "updated": updated,
+        "failed": failed,
+        "skipped": skipped,
+        "errors": errors,
+    }
+    log_operation(
+        event_type="ha_area_reassign",
+        source="system",
+        action="ha.areas.reassign",
+        trace_id=trace_id,
+        success=success,
+        duration_ms=duration_ms,
+        detail=detail,
+    )
+
+    message = "HA entity area reassignment completed" if success else "HA entity area reassignment completed with errors"
+    return ToolCallResponse(success=success, message=message, trace_id=trace_id, data=detail)
+
+
+async def audit_ha_areas(
+    *,
+    target_areas: list[str],
+    domains: list[str] | str | None = None,
+    include_unavailable: bool = False,
+    trace_id: str | None = None,
+    dry_run: bool = False,
+) -> ToolCallResponse:
+    normalized_target_input = _normalize_payload_or_raise(target_areas, field_path="target_areas", trace_id=trace_id)
+    normalized_domain_input = _normalize_payload_or_raise(domains, field_path="domains", trace_id=trace_id)
+    normalized_targets = _normalize_target_areas(normalized_target_input)
+    if not normalized_targets:
+        return ToolCallResponse(success=False, message="target_areas is required", trace_id=trace_id)
+
+    domain_list = _normalize_domains(normalized_domain_input)
+    domain_set = {item.strip().lower() for item in domain_list if item.strip()}
+    if not domain_set:
+        domain_set = set(DEFAULT_AREA_AUDIT_DOMAINS)
+        domain_list = sorted(domain_set)
+
+    started = perf_counter()
+    errors: list[str] = []
+
+    areas_result = await get_ha_areas(include_state_validation=False)
+    area_rows = areas_result.get("areas", []) if isinstance(areas_result.get("areas"), list) else []
+    if not area_rows and not areas_result.get("success"):
+        errors.append(str(areas_result.get("errors", "failed to load ha areas")))
+
+    target_norms = {_normalize_area_label(name) for name in normalized_targets}
+    target_entities: set[str] = set()
+    all_assigned_entities: set[str] = set()
+    found_target_norms: set[str] = set()
+    target_area_rows: list[dict[str, Any]] = []
+    outside_target_rows: list[dict[str, Any]] = []
+
+    for row in area_rows:
+        if not isinstance(row, dict):
+            continue
+        area_id = str(row.get("area_id", "")).strip()
+        area_name = str(row.get("area_name", "")).strip() or area_id
+        if not area_id:
+            continue
+
+        ha_entities = _to_entity_id_list(row.get("ha_entities"))
+        if not ha_entities:
+            ha_entities = _to_entity_id_list(row.get("entities"))
+        all_assigned_entities.update(ha_entities)
+
+        normalized_name = _normalize_area_label(area_name)
+        normalized_id = _normalize_area_label(area_id)
+        is_target = normalized_name in target_norms or normalized_id in target_norms
+
+        area_info = {
+            "area_id": area_id,
+            "area_name": area_name,
+            "entity_count": len(ha_entities),
+            "entity_ids": ha_entities,
+        }
+        if is_target:
+            found_target_norms.add(normalized_name)
+            found_target_norms.add(normalized_id)
+            target_entities.update(ha_entities)
+            target_area_rows.append(area_info)
+        elif ha_entities:
+            outside_target_rows.append(area_info)
+
+    missing_targets = [name for name in normalized_targets if _normalize_area_label(name) not in found_target_norms]
+
+    states_result = await fetch_ha_states_raw()
+    if not states_result.get("ok"):
+        errors.append(str(states_result.get("error", "failed to fetch ha states")))
+        state_rows: list[dict[str, Any]] = []
+    else:
+        state_rows = [row for row in states_result.get("data", []) if isinstance(row, dict)]
+
+    unassigned_entities: list[dict[str, Any]] = []
+    assigned_target_count = 0
+    scanned_count = 0
+    ignored_count = 0
+
+    for row in state_rows:
+        entity_id = str(row.get("entity_id", "")).strip()
+        if not entity_id or "." not in entity_id:
+            continue
+        entity_domain = entity_id.split(".", 1)[0].strip().lower()
+        if entity_domain not in domain_set:
+            continue
+        if _is_area_audit_ignored_entity(entity_id):
+            ignored_count += 1
+            continue
+        scanned_count += 1
+
+        state_text = str(row.get("state", "")).strip().lower()
+        if not include_unavailable and state_text in {"unknown", "unavailable"}:
+            continue
+
+        if entity_id in all_assigned_entities:
+            if entity_id in target_entities:
+                assigned_target_count += 1
+            continue
+
+        attrs = row.get("attributes", {}) if isinstance(row.get("attributes"), dict) else {}
+        friendly_name = str(attrs.get("friendly_name", "")).strip()
+        suggested_area, match_token = _suggest_area_for_entity(
+            entity_id=entity_id,
+            friendly_name=friendly_name,
+            target_areas=normalized_targets,
+        )
+
+        unassigned_entities.append(
+            {
+                "entity_id": entity_id,
+                "domain": entity_domain,
+                "friendly_name": friendly_name or None,
+                "state": row.get("state"),
+                "suggested_area": suggested_area,
+                "reason": f"name_match:{match_token}" if match_token else "no_match",
+            }
+        )
+
+    target_area_rows.sort(key=lambda item: str(item.get("area_name", "")))
+    outside_target_rows.sort(key=lambda item: str(item.get("area_name", "")))
+    unassigned_entities.sort(
+        key=lambda item: (
+            0 if item.get("suggested_area") else 1,
+            str(item.get("suggested_area") or ""),
+            str(item.get("entity_id") or ""),
+        )
+    )
+
+    suggested_count = len([item for item in unassigned_entities if item.get("suggested_area")])
+    detail = {
+        "target_areas": normalized_targets,
+        "missing_target_areas": missing_targets,
+        "domains": sorted(domain_set),
+        "include_unavailable": include_unavailable,
+        "dry_run": dry_run,
+        "target_area_summary": target_area_rows,
+        "outside_target_area_summary": outside_target_rows,
+        "scanned_entity_count": scanned_count,
+        "ignored_entity_count": ignored_count,
+        "assigned_in_target_count": assigned_target_count,
+        "unassigned_entity_count": len(unassigned_entities),
+        "suggested_assignment_count": suggested_count,
+        "unassigned_entities": unassigned_entities,
+        "errors": errors,
+    }
+
+    duration_ms = round((perf_counter() - started) * 1000, 2)
+    success = not errors
+    log_operation(
+        event_type="ha_area_audit",
+        source="system",
+        action="ha.areas.audit",
+        trace_id=trace_id,
+        success=success,
+        duration_ms=duration_ms,
+        detail=detail,
+    )
+
+    return ToolCallResponse(
+        success=success,
+        message="HA area audit completed" if success else "HA area audit completed with errors",
+        trace_id=trace_id,
+        data=detail,
+    )
+
+
+async def sync_ha_areas(
+    *,
+    target_areas: list[str],
+    delete_unused: bool = True,
+    force_delete_in_use: bool = False,
+    trace_id: str | None = None,
+    dry_run: bool = False,
+) -> ToolCallResponse:
+    normalized_target_input = _normalize_payload_or_raise(target_areas, field_path="target_areas", trace_id=trace_id)
+    normalized_targets = _normalize_target_areas(normalized_target_input)
+    if not normalized_targets:
+        return ToolCallResponse(
+            success=False,
+            message="target_areas is required",
+            trace_id=trace_id,
+        )
+
+    if not settings.HA_TOKEN:
+        return ToolCallResponse(success=False, message="HA token missing", trace_id=trace_id)
+
+    try:
+        import websockets
+    except Exception as ex:
+        return ToolCallResponse(success=False, message=f"websocket dependency missing: {ex}", trace_id=trace_id)
+
+    created: list[dict[str, Any]] = []
+    renamed: list[dict[str, Any]] = []
+    kept: list[dict[str, Any]] = []
+    deleted: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    errors: list[str] = []
+
+    started = perf_counter()
+    ws_url = _ha_websocket_url(settings.HA_BASE_URL)
+
+    try:
+        async with websockets.connect(
+            ws_url,
+            open_timeout=settings.HA_CONTEXT_TIMEOUT_SEC,
+            close_timeout=5,
+            max_size=4_000_000,
+        ) as ws:
+            first = json.loads(await ws.recv())
+            if first.get("type") != "auth_required":
+                return ToolCallResponse(
+                    success=False,
+                    message=f"unexpected websocket handshake: {first.get('type')}",
+                    trace_id=trace_id,
+                )
+
+            await ws.send(json.dumps({"type": "auth", "access_token": settings.HA_TOKEN}, ensure_ascii=False))
+            second = json.loads(await ws.recv())
+            if second.get("type") != "auth_ok":
+                return ToolCallResponse(
+                    success=False,
+                    message=f"websocket auth failed: {second}",
+                    trace_id=trace_id,
+                )
+
+            request_id = 1
+            listed = await _ha_ws_send_command(ws, request_id, {"type": "config/area_registry/list"})
+            request_id += 1
+            if not listed.get("success"):
+                detail = listed.get("error", {})
+                return ToolCallResponse(
+                    success=False,
+                    message=f"list area registry failed: {detail}",
+                    trace_id=trace_id,
+                )
+
+            rows = _area_rows_from_ws_list(listed.get("result"))
+            used_ids: set[str] = set()
+
+            for target_name in normalized_targets:
+                exact = _find_area_by_name(rows, target_name, used_ids=used_ids)
+                if exact is not None:
+                    kept.append({"area_id": exact["area_id"], "name": exact["name"]})
+                    used_ids.add(exact["area_id"])
+                    continue
+
+                alias = _find_area_by_alias(rows, target_name, used_ids=used_ids)
+                if alias is not None:
+                    if _normalize_area_label(alias["name"]) == _normalize_area_label(target_name):
+                        kept.append({"area_id": alias["area_id"], "name": alias["name"]})
+                    elif dry_run:
+                        renamed.append({"area_id": alias["area_id"], "from": alias["name"], "to": target_name})
+                        alias["name"] = target_name
+                    else:
+                        update_resp = await _ha_ws_send_command(
+                            ws,
+                            request_id,
+                            {
+                                "type": "config/area_registry/update",
+                                "area_id": alias["area_id"],
+                                "name": target_name,
+                            },
+                        )
+                        request_id += 1
+                        if update_resp.get("success"):
+                            renamed.append({"area_id": alias["area_id"], "from": alias["name"], "to": target_name})
+                            alias["name"] = target_name
+                        else:
+                            errors.append(
+                                f"rename_failed:{alias['area_id']}:{update_resp.get('error', {}).get('message', 'unknown')}"
+                            )
+                            continue
+                    used_ids.add(alias["area_id"])
+                    continue
+
+                seed = AREA_CREATE_SEED.get(target_name, target_name.lower().replace(" ", "_"))
+                candidate_name = seed
+                existing_name_set = {_normalize_area_label(row["name"]) for row in rows}
+                index = 2
+                while _normalize_area_label(candidate_name) in existing_name_set:
+                    candidate_name = f"{seed}_{index}"
+                    index += 1
+
+                if dry_run:
+                    created.append({"area_id": candidate_name, "name": target_name})
+                    rows.append({"area_id": candidate_name, "name": target_name})
+                    used_ids.add(candidate_name)
+                    continue
+
+                create_resp = await _ha_ws_send_command(
+                    ws,
+                    request_id,
+                    {
+                        "type": "config/area_registry/create",
+                        "name": candidate_name,
+                    },
+                )
+                request_id += 1
+                if not create_resp.get("success"):
+                    errors.append(
+                        f"create_failed:{target_name}:{create_resp.get('error', {}).get('message', 'unknown')}"
+                    )
+                    continue
+
+                result_row = create_resp.get("result", {}) if isinstance(create_resp.get("result"), dict) else {}
+                area_id = str(result_row.get("area_id", "")).strip() or candidate_name
+                current_name = str(result_row.get("name", "")).strip() or candidate_name
+
+                if _normalize_area_label(current_name) != _normalize_area_label(target_name):
+                    update_resp = await _ha_ws_send_command(
+                        ws,
+                        request_id,
+                        {
+                            "type": "config/area_registry/update",
+                            "area_id": area_id,
+                            "name": target_name,
+                        },
+                    )
+                    request_id += 1
+                    if update_resp.get("success"):
+                        current_name = target_name
+                    else:
+                        errors.append(
+                            f"rename_after_create_failed:{area_id}:{update_resp.get('error', {}).get('message', 'unknown')}"
+                        )
+
+                created.append({"area_id": area_id, "name": current_name})
+                rows.append({"area_id": area_id, "name": current_name})
+                used_ids.add(area_id)
+
+            if delete_unused:
+                area_entity_count = await _build_area_entity_count() if not force_delete_in_use else {}
+                target_name_set = {_normalize_area_label(name) for name in normalized_targets}
+                for row in rows:
+                    area_id = row["area_id"]
+                    area_name = row["name"]
+                    if _normalize_area_label(area_name) in target_name_set:
+                        continue
+
+                    if not force_delete_in_use:
+                        entity_count = int(area_entity_count.get(area_id, 0) or 0)
+                        if entity_count > 0:
+                            skipped.append(
+                                {
+                                    "area_id": area_id,
+                                    "name": area_name,
+                                    "reason": "in_use",
+                                    "entity_count": entity_count,
+                                }
+                            )
+                            continue
+
+                    if dry_run:
+                        deleted.append({"area_id": area_id, "name": area_name})
+                        continue
+
+                    delete_resp = await _ha_ws_send_command(
+                        ws,
+                        request_id,
+                        {
+                            "type": "config/area_registry/delete",
+                            "area_id": area_id,
+                        },
+                    )
+                    request_id += 1
+                    if delete_resp.get("success"):
+                        deleted.append({"area_id": area_id, "name": area_name})
+                    else:
+                        errors.append(
+                            f"delete_failed:{area_id}:{delete_resp.get('error', {}).get('message', 'unknown')}"
+                        )
+
+    except Exception as ex:
+        errors.append(str(ex))
+
+    duration_ms = round((perf_counter() - started) * 1000, 2)
+    success = not errors
+    detail = {
+        "target_areas": normalized_targets,
+        "delete_unused": delete_unused,
+        "force_delete_in_use": force_delete_in_use,
+        "dry_run": dry_run,
+        "created": created,
+        "renamed": renamed,
+        "kept": kept,
+        "deleted": deleted,
+        "skipped": skipped,
+        "errors": errors,
+    }
+    log_operation(
+        event_type="ha_area_sync",
+        source="system",
+        action="ha.areas.sync",
+        trace_id=trace_id,
+        success=success,
+        duration_ms=duration_ms,
+        detail=detail,
+    )
+
+    message = "HA areas synchronized" if success else "HA areas sync completed with errors"
+    return ToolCallResponse(
+        success=success,
+        message=message,
+        trace_id=trace_id,
+        data=detail,
     )
 
 
@@ -261,7 +1730,7 @@ async def build_context_summary() -> dict[str, Any]:
     return context
 
 
-def resolve_service_data(item: ToolCatalogItem, arguments: dict[str, Any]) -> dict[str, Any]:
+async def resolve_service_data(item: ToolCatalogItem, arguments: dict[str, Any]) -> dict[str, Any]:
     merged = dict(item.default_arguments)
     merged.update(arguments)
 
@@ -269,11 +1738,11 @@ def resolve_service_data(item: ToolCatalogItem, arguments: dict[str, Any]) -> di
         return merged
 
     if item.strategy == "light_area":
-        entity_id = resolve_area_entity("light", merged)
+        entity_id = await resolve_area_entity("light", merged)
         return {"entity_id": entity_id}
 
     if item.strategy == "cover_area":
-        entity_id = resolve_area_entity("cover", merged)
+        entity_id = await resolve_area_entity("cover", merged)
         return {"entity_id": entity_id}
 
     if item.strategy == "scene_id":
@@ -283,11 +1752,11 @@ def resolve_service_data(item: ToolCatalogItem, arguments: dict[str, Any]) -> di
         return {"entity_id": scene_id}
 
     if item.strategy == "climate_area":
-        entity_id = resolve_area_entity("climate", merged)
+        entity_id = await resolve_area_entity("climate", merged)
         return {"entity_id": entity_id}
 
     if item.strategy == "climate_area_temperature":
-        entity_id = resolve_area_entity("climate", merged)
+        entity_id = await resolve_area_entity("climate", merged)
         temp_raw = merged.get("temperature")
         if temp_raw is None:
             raise HTTPException(status_code=400, detail="temperature is required")
@@ -308,12 +1777,18 @@ def resolve_domain(item: ToolCatalogItem, service_data: dict[str, Any]) -> str:
     return infer_domain_from_entity(service_data.get("entity_id"), fallback="homeassistant")
 
 
-def resolve_area_entity(entity_type: str, merged_args: dict[str, Any]) -> str | list[str]:
+async def resolve_area_entity(entity_type: str, merged_args: dict[str, Any]) -> str | list[str]:
     explicit = parse_entity_ids(merged_args.get("entity_id"))
     if explicit is not None:
         return explicit
 
     area = str(merged_args.get("area", "living_room")).strip().lower()
+    area_candidates = _iter_area_lookup_candidates(area)
+
+    from_ha = await _resolve_entities_from_ha_area(entity_type=entity_type, area_candidates=area_candidates)
+    if from_ha is not None:
+        return from_ha
+
     area_map = extract_area_entity_map(merged_args.get("area_entity_map"), entity_type=entity_type)
     if not area_map:
         raw_area_map = settings.AREA_ENTITY_MAP.get(entity_type, {})
@@ -322,9 +1797,15 @@ def resolve_area_entity(entity_type: str, merged_args: dict[str, Any]) -> str | 
             if parsed is not None:
                 area_map[str(key).strip().lower()] = parsed
 
-    raw_entity: Any = area_map.get(area)
-    if raw_entity is None:
-        raw_entity = area_map.get("living_room")
+    entity_id = _find_entity_for_area_map(area_map, area_candidates=area_candidates)
+    if entity_id is not None:
+        return entity_id
+
+    living_room_fallback = _find_entity_for_area_map(area_map, area_candidates=["living_room", "客厅"])
+    if living_room_fallback is not None:
+        return living_room_fallback
+
+    raw_entity: Any = None
     if raw_entity is None:
         for candidate in area_map.values():
             parsed_candidate = parse_entity_ids(candidate)

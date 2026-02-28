@@ -70,10 +70,23 @@ def env_str(name: str, default: str) -> str:
     return value
 
 
+def env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    normalized = raw.strip().lower()
+    if normalized in {"1", "true", "yes", "y", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "n", "off"}:
+        return False
+    return default
+
+
 HA_BASE_URL = os.getenv("HA_BASE_URL", "http://homeassistant.local:8123").rstrip("/")
 HA_TOKEN = os.getenv("HA_TOKEN", "")
 HA_TIMEOUT_SEC = env_float("HA_TIMEOUT_SEC", 6.0)
 HA_CONTEXT_TIMEOUT_SEC = env_float("HA_CONTEXT_TIMEOUT_SEC", 8.0)
+TEXT_ENCODING_STRICT = env_bool("TEXT_ENCODING_STRICT", True)
 
 APP_DIR = Path(__file__).resolve().parent.parent
 HA_TOOL_CATALOG_PATH = env_path("HA_TOOL_CATALOG_PATH", str(APP_DIR / "tool_catalog.json"))

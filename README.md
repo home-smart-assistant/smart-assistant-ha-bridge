@@ -68,6 +68,7 @@ See `.env.example`.
 - `HA_TOKEN`
 - `HA_TIMEOUT_SEC`
 - `HA_CONTEXT_TIMEOUT_SEC`
+- `TEXT_ENCODING_STRICT` (`true` by default; reject irrecoverable garbled text with HTTP 400)
 - `HA_TOOL_CATALOG_PATH`
 - `HA_DB_PATH`
 - `HA_LOG_PATH`
@@ -93,3 +94,4 @@ Entity mapping:
 - 日志只写文件，不写数据库；采用异步队列写盘，避免阻塞接口请求。
 - 日志采用按大小轮转 + 保留份数/天数清理，并在队列满时丢弃并计数。
 - 可使用 `dry_run=true` 做无副作用预演。
+- 编码策略：所有源码/文档使用 UTF-8；入参在执行前做统一文本规范化，无法可靠修复时返回 `400`（`error_code=invalid_text_encoding`）。

@@ -10,6 +10,9 @@ StrategyName = Literal[
     "climate_area",
     "climate_area_temperature",
     "cover_area",
+    "area_sync",
+    "area_audit",
+    "area_assign",
 ]
 PermissionLevel = Literal["low", "medium", "high", "critical"]
 
@@ -141,6 +144,52 @@ class ClimateControlRequest(BaseModel):
 class CustomDeviceControlRequest(BaseModel):
     tool_name: str = Field(min_length=1)
     arguments: dict[str, Any] = Field(default_factory=dict)
+    trace_id: str | None = None
+    dry_run: bool = False
+
+
+class AreaSyncRequest(BaseModel):
+    target_areas: list[str] = Field(default_factory=list, description="Target area display names")
+    delete_unused: bool = Field(default=True, description="Delete areas outside target list")
+    force_delete_in_use: bool = Field(
+        default=False,
+        description="Delete area even when entities/devices are still assigned",
+    )
+    trace_id: str | None = None
+    dry_run: bool = False
+
+
+class AreaAuditRequest(BaseModel):
+    target_areas: list[str] = Field(default_factory=list, description="Target area display names")
+    domains: list[str] = Field(default_factory=list, description="Entity domains to inspect, e.g. light/climate")
+    include_unavailable: bool = Field(default=False, description="Include unavailable entities in unassigned list")
+    trace_id: str | None = None
+    dry_run: bool = False
+
+
+class AreaAssignRequest(BaseModel):
+    target_areas: list[str] = Field(default_factory=list, description="Target area display names")
+    domains: list[str] = Field(default_factory=list, description="Entity domains to inspect before assignment")
+    include_unavailable: bool = Field(default=False, description="Include unavailable entities in assignment candidates")
+    only_with_suggestion: bool = Field(
+        default=True,
+        description="Assign only entities that have a suggested target area from audit",
+    )
+    max_updates: int = Field(default=200, ge=1, le=2000, description="Maximum number of entities to update")
+    trace_id: str | None = None
+    dry_run: bool = False
+
+
+class EntityAreaAssignment(BaseModel):
+    entity_id: str = Field(min_length=1, description="Entity id to reassign, e.g. switch.xxx")
+    area: str = Field(min_length=1, description="Target area id or name")
+
+
+class AreaReassignRequest(BaseModel):
+    assignments: list[EntityAreaAssignment] = Field(
+        default_factory=list,
+        description="Explicit entity to area assignments",
+    )
     trace_id: str | None = None
     dry_run: bool = False
 

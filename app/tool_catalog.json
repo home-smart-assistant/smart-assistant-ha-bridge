@@ -2,6 +2,122 @@
   "version": 1,
   "tools": [
     {
+      "tool_name": "home.areas.assign",
+      "domain": "ha",
+      "service": "areas_assign",
+      "strategy": "area_assign",
+      "enabled": true,
+      "tool_version": 1,
+      "schema_version": "1.0",
+      "permission_level": "medium",
+      "environment_tags": [
+        "home",
+        "prod"
+      ],
+      "allowed_agents": [
+        "home_automation_agent"
+      ],
+      "rollout_percentage": 100,
+      "description": "Assign unassigned entities to HA areas based on audit suggestions",
+      "default_arguments": {
+        "target_areas": [
+          "玄关",
+          "厨房",
+          "客厅",
+          "主卧",
+          "次卧",
+          "餐厅",
+          "书房",
+          "卫生间",
+          "走廊"
+        ],
+        "domains": [
+          "light",
+          "switch",
+          "climate",
+          "cover",
+          "fan"
+        ],
+        "include_unavailable": false,
+        "only_with_suggestion": true,
+        "max_updates": 200
+      }
+    },
+    {
+      "tool_name": "home.areas.audit",
+      "domain": "ha",
+      "service": "areas_audit",
+      "strategy": "area_audit",
+      "enabled": true,
+      "tool_version": 1,
+      "schema_version": "1.0",
+      "permission_level": "low",
+      "environment_tags": [
+        "home",
+        "prod"
+      ],
+      "allowed_agents": [
+        "home_automation_agent"
+      ],
+      "rollout_percentage": 100,
+      "description": "Audit entity area assignment and suggest target area for unassigned entities",
+      "default_arguments": {
+        "target_areas": [
+          "玄关",
+          "厨房",
+          "客厅",
+          "主卧",
+          "次卧",
+          "餐厅",
+          "书房",
+          "卫生间",
+          "走廊"
+        ],
+        "domains": [
+          "light",
+          "switch",
+          "climate",
+          "cover",
+          "fan"
+        ],
+        "include_unavailable": false
+      }
+    },
+    {
+      "tool_name": "home.areas.sync",
+      "domain": "ha",
+      "service": "areas_sync",
+      "strategy": "area_sync",
+      "enabled": true,
+      "tool_version": 1,
+      "schema_version": "1.0",
+      "permission_level": "medium",
+      "environment_tags": [
+        "home",
+        "prod"
+      ],
+      "allowed_agents": [
+        "home_automation_agent"
+      ],
+      "rollout_percentage": 100,
+      "description": "Ensure target HA areas exist and optionally delete unused areas",
+      "default_arguments": {
+        "target_areas": [
+          "玄关",
+          "厨房",
+          "客厅",
+          "主卧",
+          "次卧",
+          "餐厅",
+          "书房",
+          "卫生间",
+          "走廊"
+        ],
+        "delete_unused": true,
+        "force_delete_in_use": false
+      }
+    },
+    {
       "tool_name": "home.climate.set_temperature",
       "domain": "climate",
       "service": "set_temperature",
@@ -22,9 +138,9 @@
       "default_arguments": {
         "area": "living_room",
         "area_entity_map": {
-          "living_room": "climate.living_room_ac",
-          "bedroom": "climate.bedroom_ac",
-          "study": "climate.study_ac"
+          "living_room": "climate.xiaomi_cn_931449784_h39h00",
+          "bedroom": "climate.xiaomi_cn_964614990_h40h00",
+          "study": "climate.xiaomi_cn_931448178_h39h00"
         }
       }
     },
@@ -49,9 +165,9 @@
       "default_arguments": {
         "area": "living_room",
         "area_entity_map": {
-          "living_room": "climate.living_room_ac",
-          "bedroom": "climate.bedroom_ac",
-          "study": "climate.study_ac"
+          "living_room": "climate.xiaomi_cn_931449784_h39h00",
+          "bedroom": "climate.xiaomi_cn_964614990_h40h00",
+          "study": "climate.xiaomi_cn_931448178_h39h00"
         }
       }
     },
@@ -76,9 +192,9 @@
       "default_arguments": {
         "area": "living_room",
         "area_entity_map": {
-          "living_room": "climate.living_room_ac",
-          "bedroom": "climate.bedroom_ac",
-          "study": "climate.study_ac"
+          "living_room": "climate.xiaomi_cn_931449784_h39h00",
+          "bedroom": "climate.xiaomi_cn_964614990_h40h00",
+          "study": "climate.xiaomi_cn_931448178_h39h00"
         }
       }
     },
