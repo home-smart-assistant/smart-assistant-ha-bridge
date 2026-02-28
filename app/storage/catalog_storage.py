@@ -13,6 +13,60 @@ def get_db_connection() -> sqlite3.Connection:
     return conn
 
 
+def _ensure_tool_catalog_schema(conn: sqlite3.Connection) -> None:
+    rows = conn.execute("PRAGMA table_info(tool_catalog)").fetchall()
+    columns = {str(row["name"]) for row in rows}
+    migrations: list[str] = []
+
+    if "tool_version" not in columns:
+        migrations.append("ALTER TABLE tool_catalog ADD COLUMN tool_version INTEGER NOT NULL DEFAULT 1")
+    if "schema_version" not in columns:
+        migrations.append("ALTER TABLE tool_catalog ADD COLUMN schema_version TEXT NOT NULL DEFAULT '1.0'")
+    if "permission_level" not in columns:
+        migrations.append("ALTER TABLE tool_catalog ADD COLUMN permission_level TEXT NOT NULL DEFAULT 'low'")
+    if "environment_tags_json" not in columns:
+        migrations.append(
+            "ALTER TABLE tool_catalog ADD COLUMN environment_tags_json TEXT NOT NULL DEFAULT '[\"home\",\"prod\"]'"
+        )
+    if "allowed_agents_json" not in columns:
+        migrations.append(
+            "ALTER TABLE tool_catalog ADD COLUMN allowed_agents_json TEXT NOT NULL DEFAULT '[\"home_automation_agent\"]'"
+        )
+    if "rollout_percentage" not in columns:
+        migrations.append("ALTER TABLE tool_catalog ADD COLUMN rollout_percentage INTEGER NOT NULL DEFAULT 100")
+
+    for sql in migrations:
+        conn.execute(sql)
+
+
+def _parse_json_dict(raw: Any) -> dict[str, Any]:
+    try:
+        parsed = json.loads(raw or "{}")
+        if isinstance(parsed, dict):
+            return parsed
+    except Exception:
+        pass
+    return {}
+
+
+def _parse_json_string_list(raw: Any) -> list[str]:
+    try:
+        parsed = json.loads(raw or "[]")
+        if isinstance(parsed, list):
+            values = [str(item).strip() for item in parsed if str(item).strip()]
+            return values
+    except Exception:
+        pass
+    return []
+
+
+def _normalize_permission_level(raw: Any) -> str:
+    normalized = str(raw or "low").strip().lower()
+    if normalized in {"low", "medium", "high", "critical"}:
+        return normalized
+    return "low"
+
+
 def init_database() -> None:
     settings.HA_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with settings.storage_lock:
@@ -25,6 +79,12 @@ def init_database() -> None:
                     service TEXT NOT NULL,
                     strategy TEXT NOT NULL,
                     enabled INTEGER NOT NULL DEFAULT 1,
+                    tool_version INTEGER NOT NULL DEFAULT 1,
+                    schema_version TEXT NOT NULL DEFAULT '1.0',
+                    permission_level TEXT NOT NULL DEFAULT 'low',
+                    environment_tags_json TEXT NOT NULL DEFAULT '["home","prod"]',
+                    allowed_agents_json TEXT NOT NULL DEFAULT '["home_automation_agent"]',
+                    rollout_percentage INTEGER NOT NULL DEFAULT 100,
                     description TEXT NOT NULL DEFAULT '',
                     default_arguments_json TEXT NOT NULL DEFAULT '{}'
                 );
@@ -49,6 +109,7 @@ def init_database() -> None:
                 );
                 """
             )
+            _ensure_tool_catalog_schema(conn)
             conn.commit()
 
 
@@ -89,13 +150,17 @@ def read_legacy_tool_catalog() -> dict[str, ToolCatalogItem]:
 def save_tool_catalog_to_db(items: dict[str, ToolCatalogItem]) -> None:
     with settings.storage_lock:
         with get_db_connection() as conn:
+            _ensure_tool_catalog_schema(conn)
             conn.execute("DELETE FROM tool_catalog")
             for item in sorted(items.values(), key=lambda x: x.tool_name):
                 conn.execute(
                     """
                     INSERT INTO tool_catalog (
-                        tool_name, domain, service, strategy, enabled, description, default_arguments_json
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                        tool_name, domain, service, strategy, enabled,
+                        tool_version, schema_version, permission_level,
+                        environment_tags_json, allowed_agents_json, rollout_percentage,
+                        description, default_arguments_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         item.tool_name,
@@ -103,6 +168,12 @@ def save_tool_catalog_to_db(items: dict[str, ToolCatalogItem]) -> None:
                         item.service,
                         item.strategy,
                         1 if item.enabled else 0,
+                        item.tool_version,
+                        item.schema_version,
+                        item.permission_level,
+                        json.dumps(item.environment_tags, ensure_ascii=False),
+                        json.dumps(item.allowed_agents, ensure_ascii=False),
+                        item.rollout_percentage,
                         item.description,
                         json.dumps(item.default_arguments, ensure_ascii=False),
                     ),
@@ -113,9 +184,14 @@ def save_tool_catalog_to_db(items: dict[str, ToolCatalogItem]) -> None:
 def load_tool_catalog_from_db() -> dict[str, ToolCatalogItem]:
     with settings.storage_lock:
         with get_db_connection() as conn:
+            _ensure_tool_catalog_schema(conn)
             rows = conn.execute(
                 """
-                SELECT tool_name, domain, service, strategy, enabled, description, default_arguments_json
+                SELECT
+                    tool_name, domain, service, strategy, enabled,
+                    tool_version, schema_version, permission_level,
+                    environment_tags_json, allowed_agents_json, rollout_percentage,
+                    description, default_arguments_json
                 FROM tool_catalog
                 ORDER BY tool_name
                 """
@@ -123,12 +199,9 @@ def load_tool_catalog_from_db() -> dict[str, ToolCatalogItem]:
 
     items: dict[str, ToolCatalogItem] = {}
     for row in rows:
-        try:
-            defaults = json.loads(row["default_arguments_json"] or "{}")
-            if not isinstance(defaults, dict):
-                defaults = {}
-        except Exception:
-            defaults = {}
+        defaults = _parse_json_dict(row["default_arguments_json"])
+        environment_tags = _parse_json_string_list(row["environment_tags_json"]) or ["home", "prod"]
+        allowed_agents = _parse_json_string_list(row["allowed_agents_json"]) or ["home_automation_agent"]
 
         item = ToolCatalogItem(
             tool_name=str(row["tool_name"]),
@@ -136,6 +209,12 @@ def load_tool_catalog_from_db() -> dict[str, ToolCatalogItem]:
             service=str(row["service"]),
             strategy=str(row["strategy"]),
             enabled=bool(row["enabled"]),
+            tool_version=max(1, int(row["tool_version"] or 1)),
+            schema_version=str(row["schema_version"] or "1.0"),
+            permission_level=_normalize_permission_level(row["permission_level"]),
+            environment_tags=environment_tags,
+            allowed_agents=allowed_agents,
+            rollout_percentage=max(0, min(100, int(row["rollout_percentage"] or 100))),
             description=str(row["description"] or ""),
             default_arguments=defaults,
         )
@@ -166,10 +245,43 @@ def merge_missing_default_tools() -> None:
     if not current:
         return
 
+    def merge_missing_dict_values(target: dict[str, Any], defaults: dict[str, Any]) -> bool:
+        changed_local = False
+        for key, value in defaults.items():
+            if key not in target:
+                target[key] = value
+                changed_local = True
+                continue
+            if isinstance(target[key], dict) and isinstance(value, dict):
+                if merge_missing_dict_values(target[key], value):
+                    changed_local = True
+        return changed_local
+
     changed = False
     for item in default_tool_catalog_items():
         if item.tool_name not in current:
             current[item.tool_name] = item
+            changed = True
+            continue
+
+        existing = current[item.tool_name]
+        update_fields: dict[str, Any] = {}
+        merged_defaults = dict(existing.default_arguments)
+        if merge_missing_dict_values(merged_defaults, item.default_arguments):
+            update_fields["default_arguments"] = merged_defaults
+        if existing.tool_version < 1:
+            update_fields["tool_version"] = item.tool_version
+        if not existing.schema_version.strip():
+            update_fields["schema_version"] = item.schema_version
+        if not existing.environment_tags:
+            update_fields["environment_tags"] = list(item.environment_tags)
+        if not existing.allowed_agents:
+            update_fields["allowed_agents"] = list(item.allowed_agents)
+        if not 0 <= existing.rollout_percentage <= 100:
+            update_fields["rollout_percentage"] = item.rollout_percentage
+
+        if update_fields:
+            current[item.tool_name] = existing.model_copy(update=update_fields)
             changed = True
 
     if changed:

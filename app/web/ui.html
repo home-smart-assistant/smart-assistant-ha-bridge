@@ -183,6 +183,11 @@
       outline: none;
     }
 
+    select[multiple] {
+      min-height: 104px;
+      padding: 6px 8px;
+    }
+
     textarea {
       min-height: 120px;
       resize: vertical;
@@ -498,14 +503,14 @@
               </div>
               <div class="row">
                 <label for="logSource">来源</label>
-                <select id="logSource">
-                  <option value="">全部</option>
+                <select id="logSource" multiple size="4">
                   <option value="external">external</option>
                   <option value="ui">ui</option>
                   <option value="system">system</option>
                 </select>
               </div>
             </div>
+            <p class="muted">来源支持多选；不选表示全部来源（Windows 可按住 Ctrl 多选）。</p>
             <div class="row">
               <label for="logLimit">最近条数</label>
               <input id="logLimit" type="number" min="10" max="1000" step="10" value="200" />
@@ -838,6 +843,13 @@
       return text.length > maxLen ? `${text.slice(0, maxLen - 3)}...` : text;
     }
 
+    function getSelectedValues(selectElement) {
+      if (!selectElement) return [];
+      return Array.from(selectElement.selectedOptions || [])
+        .map((x) => String(x.value || "").trim())
+        .filter(Boolean);
+    }
+
     function renderLogTable() {
       dom.logBody.innerHTML = "";
       if (!state.logs.length) {
@@ -1065,9 +1077,10 @@
     async function loadLogs(silent = false) {
       const limit = Math.max(1, Math.min(Number(dom.logLimit.value || 200), 1000));
       const params = new URLSearchParams();
+      const selectedSources = getSelectedValues(dom.logSource);
       params.set("limit", String(limit));
       if (dom.logEventType.value) params.set("event_type", dom.logEventType.value);
-      if (dom.logSource.value) params.set("source", dom.logSource.value);
+      selectedSources.forEach((value) => params.append("source", value));
 
       const res = await api(`/v1/logs/recent?${params.toString()}`, {
         method: "GET",
@@ -1076,7 +1089,7 @@
       if (!silent) setOutput("读取 /v1/logs/recent", res);
       if (!res.ok) {
         setStatus(`日志读取失败(${res.status})`, "err");
-        logUiAction("logs.load", { limit, event_type: dom.logEventType.value || "", source: dom.logSource.value || "" }, false);
+        logUiAction("logs.load", { limit, event_type: dom.logEventType.value || "", sources: selectedSources }, false);
         return;
       }
 
@@ -1087,7 +1100,7 @@
         + `轮转: ${res.data.backup_count ?? "-"} | 保留天数: ${res.data.retention_days ?? "-"} | `
         + `队列: ${res.data.queue_size ?? "-"} / ${res.data.queue_max ?? "-"} | 丢弃: ${res.data.dropped_count ?? 0}`;
       setStatus(`日志已刷新(${state.logs.length})`, "ok");
-      logUiAction("logs.load", { limit, event_type: dom.logEventType.value || "", source: dom.logSource.value || "" }, true);
+      logUiAction("logs.load", { limit, event_type: dom.logEventType.value || "", sources: selectedSources }, true);
     }
 
     function fillSelectedApiExample() {

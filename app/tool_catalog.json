@@ -7,9 +7,25 @@
       "service": "set_temperature",
       "strategy": "climate_area_temperature",
       "enabled": true,
+      "tool_version": 1,
+      "schema_version": "1.0",
+      "permission_level": "low",
+      "environment_tags": [
+        "home",
+        "prod"
+      ],
+      "allowed_agents": [
+        "home_automation_agent"
+      ],
+      "rollout_percentage": 100,
       "description": "Set climate target temperature by area",
       "default_arguments": {
-        "area": "living_room"
+        "area": "living_room",
+        "area_entity_map": {
+          "living_room": "climate.living_room_ac",
+          "bedroom": "climate.bedroom_ac",
+          "study": "climate.study_ac"
+        }
       }
     },
     {
@@ -18,9 +34,25 @@
       "service": "turn_off",
       "strategy": "climate_area",
       "enabled": true,
+      "tool_version": 1,
+      "schema_version": "1.0",
+      "permission_level": "low",
+      "environment_tags": [
+        "home",
+        "prod"
+      ],
+      "allowed_agents": [
+        "home_automation_agent"
+      ],
+      "rollout_percentage": 100,
       "description": "Turn off climate device by area",
       "default_arguments": {
-        "area": "living_room"
+        "area": "living_room",
+        "area_entity_map": {
+          "living_room": "climate.living_room_ac",
+          "bedroom": "climate.bedroom_ac",
+          "study": "climate.study_ac"
+        }
       }
     },
     {
@@ -29,9 +61,25 @@
       "service": "turn_on",
       "strategy": "climate_area",
       "enabled": true,
+      "tool_version": 1,
+      "schema_version": "1.0",
+      "permission_level": "low",
+      "environment_tags": [
+        "home",
+        "prod"
+      ],
+      "allowed_agents": [
+        "home_automation_agent"
+      ],
+      "rollout_percentage": 100,
       "description": "Turn on climate device by area",
       "default_arguments": {
-        "area": "living_room"
+        "area": "living_room",
+        "area_entity_map": {
+          "living_room": "climate.living_room_ac",
+          "bedroom": "climate.bedroom_ac",
+          "study": "climate.study_ac"
+        }
       }
     },
     {
@@ -40,9 +88,25 @@
       "service": "close_cover",
       "strategy": "cover_area",
       "enabled": true,
+      "tool_version": 1,
+      "schema_version": "1.0",
+      "permission_level": "low",
+      "environment_tags": [
+        "home",
+        "prod"
+      ],
+      "allowed_agents": [
+        "home_automation_agent"
+      ],
+      "rollout_percentage": 100,
       "description": "Close curtains by area",
       "default_arguments": {
-        "area": "living_room"
+        "area": "living_room",
+        "area_entity_map": {
+          "living_room": "cover.living_room",
+          "bedroom": "cover.bedroom",
+          "study": "cover.study"
+        }
       }
     },
     {
@@ -51,9 +115,25 @@
       "service": "open_cover",
       "strategy": "cover_area",
       "enabled": true,
+      "tool_version": 1,
+      "schema_version": "1.0",
+      "permission_level": "low",
+      "environment_tags": [
+        "home",
+        "prod"
+      ],
+      "allowed_agents": [
+        "home_automation_agent"
+      ],
+      "rollout_percentage": 100,
       "description": "Open curtains by area",
       "default_arguments": {
-        "area": "living_room"
+        "area": "living_room",
+        "area_entity_map": {
+          "living_room": "cover.living_room",
+          "bedroom": "cover.bedroom",
+          "study": "cover.study"
+        }
       }
     },
     {
@@ -62,9 +142,25 @@
       "service": "stop_cover",
       "strategy": "cover_area",
       "enabled": true,
+      "tool_version": 1,
+      "schema_version": "1.0",
+      "permission_level": "low",
+      "environment_tags": [
+        "home",
+        "prod"
+      ],
+      "allowed_agents": [
+        "home_automation_agent"
+      ],
+      "rollout_percentage": 100,
       "description": "Stop curtains by area",
       "default_arguments": {
-        "area": "living_room"
+        "area": "living_room",
+        "area_entity_map": {
+          "living_room": "cover.living_room",
+          "bedroom": "cover.bedroom",
+          "study": "cover.study"
+        }
       }
     },
     {
@@ -73,9 +169,31 @@
       "service": "turn_off",
       "strategy": "light_area",
       "enabled": true,
+      "tool_version": 1,
+      "schema_version": "1.0",
+      "permission_level": "low",
+      "environment_tags": [
+        "home",
+        "prod"
+      ],
+      "allowed_agents": [
+        "home_automation_agent"
+      ],
+      "rollout_percentage": 100,
       "description": "Turn off lights by area",
       "default_arguments": {
-        "area": "living_room"
+        "area": "living_room",
+        "area_entity_map": {
+          "living_room": [
+            "switch.ke_ting_can_ting_deng_l1",
+            "switch.ke_ting_can_ting_deng_l2"
+          ],
+          "bedroom": [
+            "switch.zhu_wo_deng_l1",
+            "switch.zhu_wo_deng_l2"
+          ],
+          "study": "switch.shu_fang_deng"
+        }
       }
     },
     {
@@ -84,9 +202,31 @@
       "service": "turn_on",
       "strategy": "light_area",
       "enabled": true,
+      "tool_version": 1,
+      "schema_version": "1.0",
+      "permission_level": "low",
+      "environment_tags": [
+        "home",
+        "prod"
+      ],
+      "allowed_agents": [
+        "home_automation_agent"
+      ],
+      "rollout_percentage": 100,
       "description": "Turn on lights by area",
       "default_arguments": {
-        "area": "living_room"
+        "area": "living_room",
+        "area_entity_map": {
+          "living_room": [
+            "switch.ke_ting_can_ting_deng_l1",
+            "switch.ke_ting_can_ting_deng_l2"
+          ],
+          "bedroom": [
+            "switch.zhu_wo_deng_l1",
+            "switch.zhu_wo_deng_l2"
+          ],
+          "study": "switch.shu_fang_deng"
+        }
       }
     },
     {
@@ -95,6 +235,17 @@
       "service": "turn_on",
       "strategy": "scene_id",
       "enabled": true,
+      "tool_version": 1,
+      "schema_version": "1.0",
+      "permission_level": "low",
+      "environment_tags": [
+        "home",
+        "prod"
+      ],
+      "allowed_agents": [
+        "home_automation_agent"
+      ],
+      "rollout_percentage": 100,
       "description": "Activate a Home Assistant scene entity",
       "default_arguments": {}
     }

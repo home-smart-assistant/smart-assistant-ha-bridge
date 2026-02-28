@@ -1,6 +1,60 @@
 ﻿from app.models.schemas import ApiCatalogItem, ToolCatalogItem
 
 
+from typing import Any
+
+from app.core import settings
+
+
+def _parse_default_entity(raw: Any) -> str | list[str] | None:
+    if raw is None:
+        return None
+    if isinstance(raw, list):
+        values = [str(item).strip() for item in raw if str(item).strip()]
+        if not values:
+            return None
+        if len(values) == 1:
+            return values[0]
+        return values
+
+    text = str(raw).strip()
+    if not text:
+        return None
+    if "," not in text:
+        return text
+    parts = [item.strip() for item in text.split(",") if item.strip()]
+    if not parts:
+        return None
+    if len(parts) == 1:
+        return parts[0]
+    return parts
+
+
+def _default_area_arguments(entity_type: str) -> dict[str, Any]:
+    args: dict[str, Any] = {"area": "living_room"}
+    raw_map = settings.AREA_ENTITY_MAP.get(entity_type, {})
+    area_entity_map: dict[str, str | list[str]] = {}
+    for area, raw in raw_map.items():
+        parsed = _parse_default_entity(raw)
+        if parsed is None:
+            continue
+        area_entity_map[str(area).strip().lower()] = parsed
+    if area_entity_map:
+        args["area_entity_map"] = area_entity_map
+    return args
+
+
+def _tool_metadata(permission_level: str) -> dict[str, Any]:
+    return {
+        "tool_version": 1,
+        "schema_version": "1.0",
+        "permission_level": permission_level,
+        "environment_tags": ["home", "prod"],
+        "allowed_agents": ["home_automation_agent"],
+        "rollout_percentage": 100,
+    }
+
+
 def default_tool_catalog_items() -> list[ToolCatalogItem]:
     return [
         ToolCatalogItem(
@@ -9,7 +63,8 @@ def default_tool_catalog_items() -> list[ToolCatalogItem]:
             service="turn_on",
             strategy="light_area",
             description="Turn on lights by area",
-            default_arguments={"area": "living_room"},
+            default_arguments=_default_area_arguments("light"),
+            **_tool_metadata(permission_level="low"),
         ),
         ToolCatalogItem(
             tool_name="home.lights.off",
@@ -17,7 +72,8 @@ def default_tool_catalog_items() -> list[ToolCatalogItem]:
             service="turn_off",
             strategy="light_area",
             description="Turn off lights by area",
-            default_arguments={"area": "living_room"},
+            default_arguments=_default_area_arguments("light"),
+            **_tool_metadata(permission_level="low"),
         ),
         ToolCatalogItem(
             tool_name="home.curtains.open",
@@ -25,7 +81,8 @@ def default_tool_catalog_items() -> list[ToolCatalogItem]:
             service="open_cover",
             strategy="cover_area",
             description="Open curtains by area",
-            default_arguments={"area": "living_room"},
+            default_arguments=_default_area_arguments("cover"),
+            **_tool_metadata(permission_level="low"),
         ),
         ToolCatalogItem(
             tool_name="home.curtains.close",
@@ -33,7 +90,8 @@ def default_tool_catalog_items() -> list[ToolCatalogItem]:
             service="close_cover",
             strategy="cover_area",
             description="Close curtains by area",
-            default_arguments={"area": "living_room"},
+            default_arguments=_default_area_arguments("cover"),
+            **_tool_metadata(permission_level="low"),
         ),
         ToolCatalogItem(
             tool_name="home.curtains.stop",
@@ -41,7 +99,8 @@ def default_tool_catalog_items() -> list[ToolCatalogItem]:
             service="stop_cover",
             strategy="cover_area",
             description="Stop curtains by area",
-            default_arguments={"area": "living_room"},
+            default_arguments=_default_area_arguments("cover"),
+            **_tool_metadata(permission_level="low"),
         ),
         ToolCatalogItem(
             tool_name="home.scene.activate",
@@ -50,6 +109,7 @@ def default_tool_catalog_items() -> list[ToolCatalogItem]:
             strategy="scene_id",
             description="Activate a Home Assistant scene entity",
             default_arguments={},
+            **_tool_metadata(permission_level="medium"),
         ),
         ToolCatalogItem(
             tool_name="home.climate.turn_on",
@@ -57,7 +117,8 @@ def default_tool_catalog_items() -> list[ToolCatalogItem]:
             service="turn_on",
             strategy="climate_area",
             description="Turn on climate device by area",
-            default_arguments={"area": "living_room"},
+            default_arguments=_default_area_arguments("climate"),
+            **_tool_metadata(permission_level="low"),
         ),
         ToolCatalogItem(
             tool_name="home.climate.turn_off",
@@ -65,7 +126,8 @@ def default_tool_catalog_items() -> list[ToolCatalogItem]:
             service="turn_off",
             strategy="climate_area",
             description="Turn off climate device by area",
-            default_arguments={"area": "living_room"},
+            default_arguments=_default_area_arguments("climate"),
+            **_tool_metadata(permission_level="low"),
         ),
         ToolCatalogItem(
             tool_name="home.climate.set_temperature",
@@ -73,7 +135,8 @@ def default_tool_catalog_items() -> list[ToolCatalogItem]:
             service="set_temperature",
             strategy="climate_area_temperature",
             description="Set climate target temperature by area",
-            default_arguments={"area": "living_room"},
+            default_arguments=_default_area_arguments("climate"),
+            **_tool_metadata(permission_level="medium"),
         ),
     ]
 
@@ -249,7 +312,7 @@ def default_api_catalog_items() -> list[ApiCatalogItem]:
             display_name="日志查询",
             method="GET",
             path="/v1/logs/recent",
-            description="读取最近操作日志（文件存储）。",
+            description="读取最近操作日志（文件存储，source 支持多选）。",
             sort_order=130,
         ),
         ApiCatalogItem(

@@ -188,6 +188,8 @@ Base URL 示例：`http://<bridge-host>:8092`
 ### `GET /v1/logs/recent`
 用途：
 - 查询最近日志（文件存储），支持 `limit/source/event_type` 过滤
+- `source` 支持多值：`?source=ui&source=system`
+- 兼容逗号写法：`?source=ui,system`
 
 响应关键字段：
 - `storage`（固定 `file`）

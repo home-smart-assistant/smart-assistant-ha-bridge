@@ -7,3 +7,5 @@
 *.db
 app/logs/
 *.jsonl
+run_logs/
+*.log

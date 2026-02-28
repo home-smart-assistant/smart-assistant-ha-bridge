@@ -314,12 +314,49 @@ def resolve_area_entity(entity_type: str, merged_args: dict[str, Any]) -> str | 
         return explicit
 
     area = str(merged_args.get("area", "living_room")).strip().lower()
-    area_map = settings.AREA_ENTITY_MAP.get(entity_type, {})
-    raw_entity = area_map.get(area, area_map.get("living_room", ""))
+    area_map = extract_area_entity_map(merged_args.get("area_entity_map"), entity_type=entity_type)
+    if not area_map:
+        raw_area_map = settings.AREA_ENTITY_MAP.get(entity_type, {})
+        for key, value in raw_area_map.items():
+            parsed = parse_entity_ids(value)
+            if parsed is not None:
+                area_map[str(key).strip().lower()] = parsed
+
+    raw_entity: Any = area_map.get(area)
+    if raw_entity is None:
+        raw_entity = area_map.get("living_room")
+    if raw_entity is None:
+        for candidate in area_map.values():
+            parsed_candidate = parse_entity_ids(candidate)
+            if parsed_candidate is not None:
+                raw_entity = parsed_candidate
+                break
+
     entity_id = parse_entity_ids(raw_entity)
     if entity_id is None:
         raise HTTPException(status_code=400, detail=f"{entity_type} entity is not configured for area: {area}")
     return entity_id
+
+
+def extract_area_entity_map(raw: Any, *, entity_type: str) -> dict[str, str | list[str]]:
+    if not isinstance(raw, dict):
+        return {}
+
+    source = raw
+    nested = raw.get(entity_type)
+    if isinstance(nested, dict):
+        source = nested
+
+    resolved: dict[str, str | list[str]] = {}
+    for area, value in source.items():
+        normalized_area = str(area).strip().lower()
+        if not normalized_area:
+            continue
+        parsed = parse_entity_ids(value)
+        if parsed is None:
+            continue
+        resolved[normalized_area] = parsed
+    return resolved
 
 
 def parse_entity_ids(raw: Any) -> str | list[str] | None:
@@ -373,10 +410,64 @@ def infer_domain_from_entity(entity_id: Any, fallback: str) -> str:
     return fallback
 
 
+def merge_entity_refs(
+    left: str | list[str] | None,
+    right: str | list[str] | None,
+) -> str | list[str] | None:
+    values: list[str] = []
+    for raw in (left, right):
+        parsed = parse_entity_ids(raw)
+        if parsed is None:
+            continue
+        if isinstance(parsed, list):
+            values.extend(str(item).strip() for item in parsed if str(item).strip())
+        else:
+            text = str(parsed).strip()
+            if text:
+                values.append(text)
+
+    deduped = list(dict.fromkeys(values))
+    if not deduped:
+        return None
+    if len(deduped) == 1:
+        return deduped[0]
+    return deduped
+
+
+def strategy_to_entity_type(strategy: str) -> str | None:
+    normalized = strategy.strip().lower()
+    if normalized == "light_area":
+        return "light"
+    if normalized == "cover_area":
+        return "cover"
+    if normalized in {"climate_area", "climate_area_temperature"}:
+        return "climate"
+    return None
+
+
 def build_known_entities() -> dict[str, dict[str, str | list[str] | None]]:
     known: dict[str, dict[str, str | list[str] | None]] = {}
     for entity_type, area_map in settings.AREA_ENTITY_MAP.items():
-        known[entity_type] = {area: parse_entity_ids(raw) for area, raw in area_map.items()}
+        known[entity_type] = {}
+        for area, raw in area_map.items():
+            parsed = parse_entity_ids(raw)
+            if parsed is not None:
+                known[entity_type][str(area).strip().lower()] = parsed
+
+    catalog = get_catalog_snapshot()
+    for item in catalog.values():
+        if not item.enabled:
+            continue
+        entity_type = strategy_to_entity_type(item.strategy)
+        if entity_type is None:
+            continue
+        area_map = extract_area_entity_map(item.default_arguments.get("area_entity_map"), entity_type=entity_type)
+        if not area_map:
+            continue
+        bucket = known.setdefault(entity_type, {})
+        for area, entity_ref in area_map.items():
+            bucket[area] = merge_entity_refs(bucket.get(area), entity_ref)
+
     return known
 
 
@@ -557,7 +648,8 @@ def _to_entity_id_list(raw: Any) -> list[str]:
 
 def _build_config_area_map() -> dict[str, list[str]]:
     area_map: dict[str, list[str]] = {}
-    for group in settings.AREA_ENTITY_MAP.values():
+    known_entities = build_known_entities()
+    for group in known_entities.values():
         for area, raw in group.items():
             ids = _to_entity_id_list(raw)
             if area not in area_map:

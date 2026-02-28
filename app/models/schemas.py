@@ -11,6 +11,7 @@ StrategyName = Literal[
     "climate_area_temperature",
     "cover_area",
 ]
+PermissionLevel = Literal["low", "medium", "high", "critical"]
 
 
 class ToolCallRequest(BaseModel):
@@ -44,6 +45,18 @@ class ToolCatalogItem(BaseModel):
     service: str = Field(min_length=1, description="HA service name")
     strategy: StrategyName = Field(default="passthrough", description="Argument mapping strategy")
     enabled: bool = Field(default=True, description="Whether tool is callable")
+    tool_version: int = Field(default=1, ge=1, description="Tool definition version")
+    schema_version: str = Field(default="1.0", min_length=1, description="Tool argument schema version")
+    permission_level: PermissionLevel = Field(default="low", description="Risk level for permission policies")
+    environment_tags: list[str] = Field(
+        default_factory=lambda: ["home", "prod"],
+        description="Runtime environments where this tool can be exposed",
+    )
+    allowed_agents: list[str] = Field(
+        default_factory=lambda: ["home_automation_agent"],
+        description="Agent ids that are allowed to see this tool",
+    )
+    rollout_percentage: int = Field(default=100, ge=0, le=100, description="Gray rollout percentage for sessions")
     description: str = Field(default="", description="Human-readable description")
     default_arguments: dict[str, Any] = Field(default_factory=dict, description="Default arguments")
 
@@ -53,6 +66,18 @@ class ToolCatalogUpsertRequest(BaseModel):
     service: str = Field(min_length=1, description="HA service name")
     strategy: StrategyName = Field(default="passthrough", description="Argument mapping strategy")
     enabled: bool = Field(default=True, description="Whether tool is callable")
+    tool_version: int = Field(default=1, ge=1, description="Tool definition version")
+    schema_version: str = Field(default="1.0", min_length=1, description="Tool argument schema version")
+    permission_level: PermissionLevel = Field(default="low", description="Risk level for permission policies")
+    environment_tags: list[str] = Field(
+        default_factory=lambda: ["home", "prod"],
+        description="Runtime environments where this tool can be exposed",
+    )
+    allowed_agents: list[str] = Field(
+        default_factory=lambda: ["home_automation_agent"],
+        description="Agent ids that are allowed to see this tool",
+    )
+    rollout_percentage: int = Field(default=100, ge=0, le=100, description="Gray rollout percentage for sessions")
     description: str = Field(default="", description="Human-readable description")
     default_arguments: dict[str, Any] = Field(default_factory=dict, description="Default arguments")
 

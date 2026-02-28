@@ -264,11 +264,15 @@ def log_ui_action(req: UiActionLogRequest, client_ip: str | None) -> OperationLo
 def list_recent_logs(
     *,
     limit: int = 200,
+    sources: list[str] | None = None,
     source: str | None = None,
     event_type: str | None = None,
 ) -> list[OperationLogItem]:
     safe_limit = max(1, min(limit, 1000))
     flush_logs(timeout_sec=0.35)
+    source_filters = set(sources or [])
+    if source:
+        source_filters.add(source)
 
     with settings.log_lock:
         _ensure_log_dir()
@@ -299,7 +303,7 @@ def list_recent_logs(
                 except Exception:
                     continue
 
-                if source and item.source != source:
+                if source_filters and item.source not in source_filters:
                     continue
                 if event_type and item.event_type != event_type:
                     continue
