@@ -99,6 +99,19 @@ ENTITY_TYPE_DOMAIN_CANDIDATES: dict[str, tuple[str, ...]] = {
     "climate": ("climate",),
     "cover": ("cover",),
 }
+ALL_AREA_ALIASES = (
+    "all",
+    "all_areas",
+    "all_rooms",
+    "whole_home",
+    "entire_home",
+    "全部",
+    "所有",
+    "全屋",
+    "全家",
+    "整屋",
+    "整个家",
+)
 LIGHT_SWITCH_HINTS = (
     "deng",
     "light",
@@ -444,6 +457,13 @@ def _iter_area_lookup_candidates(raw: Any) -> list[str]:
     return candidates
 
 
+def _is_all_area_request(raw: Any) -> bool:
+    normalized = _normalize_area_label(raw)
+    if not normalized:
+        return False
+    return normalized in {_normalize_area_label(alias) for alias in ALL_AREA_ALIASES}
+
+
 def _find_entity_for_area_map(
     area_map: dict[str, str | list[str]],
     *,
@@ -553,6 +573,30 @@ async def _resolve_entities_from_ha_area(
             return parsed
 
     return None
+
+
+async def _resolve_all_entities_from_ha(entity_type: str) -> str | list[str] | None:
+    try:
+        areas_result = await get_ha_areas(include_state_validation=False)
+    except Exception:
+        return None
+
+    rows = areas_result.get("areas", [])
+    if not isinstance(rows, list):
+        return None
+
+    collected: list[str] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        source = row.get("ha_entities")
+        if not isinstance(source, list) or not source:
+            source = row.get("entities")
+        entity_ids = _to_entity_id_list(source)
+        matched = _filter_entities_by_type(entity_ids, entity_type=entity_type)
+        collected.extend(matched)
+
+    return parse_entity_ids(list(dict.fromkeys(collected)))
 
 
 def _normalize_target_areas(raw: Any) -> list[str]:
@@ -1782,7 +1826,13 @@ async def resolve_area_entity(entity_type: str, merged_args: dict[str, Any]) -> 
     if explicit is not None:
         return explicit
 
-    area = str(merged_args.get("area", "living_room")).strip().lower()
+    area_raw = merged_args.get("area", "living_room")
+    area = str(area_raw).strip().lower()
+    if _is_all_area_request(area_raw):
+        all_entities = await _resolve_all_entities_from_ha(entity_type)
+        if all_entities is not None:
+            return all_entities
+
     area_candidates = _iter_area_lookup_candidates(area)
 
     from_ha = await _resolve_entities_from_ha_area(entity_type=entity_type, area_candidates=area_candidates)
@@ -1879,15 +1929,25 @@ def parse_entity_ids(raw: Any) -> str | list[str] | None:
 
 
 def infer_domain_from_entity(entity_id: Any, fallback: str) -> str:
-    first = ""
     if isinstance(entity_id, list):
-        if entity_id:
-            first = str(entity_id[0])
-    else:
-        first = str(entity_id or "")
+        domains: list[str] = []
+        for raw in entity_id:
+            text = str(raw or "").strip()
+            if "." not in text:
+                continue
+            domain = text.split(".", 1)[0].strip().lower()
+            if domain:
+                domains.append(domain)
+        unique_domains = list(dict.fromkeys(domains))
+        if len(unique_domains) == 1:
+            return unique_domains[0]
+        if len(unique_domains) > 1:
+            return fallback
+        return fallback
 
+    first = str(entity_id or "")
     if "." in first:
-        return first.split(".", 1)[0]
+        return first.split(".", 1)[0].strip().lower()
     return fallback
 
 
