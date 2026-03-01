@@ -330,6 +330,13 @@ async def execute_tool_call(req: ToolCallRequest) -> ToolCallResponse:
 
     service_data = await resolve_service_data(item, normalized_arguments)
     domain = resolve_domain(item, service_data)
+    if item.strategy == "climate_area_temperature" and domain == "climate":
+        return await execute_climate_temperature_with_retry(
+            item=item,
+            service_data=service_data,
+            trace_id=req.trace_id,
+            dry_run=req.dry_run,
+        )
     return await execute_ha_service_call(
         tool_name=item.tool_name,
         strategy=item.strategy,
@@ -339,6 +346,91 @@ async def execute_tool_call(req: ToolCallRequest) -> ToolCallResponse:
         trace_id=req.trace_id,
         dry_run=req.dry_run,
     )
+
+
+async def execute_climate_temperature_with_retry(
+    *,
+    item: ToolCatalogItem,
+    service_data: dict[str, Any],
+    trace_id: str | None,
+    dry_run: bool,
+) -> ToolCallResponse:
+    first = await execute_ha_service_call(
+        tool_name=item.tool_name,
+        strategy=item.strategy,
+        domain="climate",
+        service=item.service,
+        service_data=service_data,
+        trace_id=trace_id,
+        dry_run=dry_run,
+    )
+    if dry_run or first.success or not should_retry_climate_temperature(first):
+        return first
+
+    entity_id = service_data.get("entity_id")
+    wake_response = await execute_ha_service_call(
+        tool_name=f"{item.tool_name}.turn_on_retry",
+        strategy=item.strategy,
+        domain="climate",
+        service="turn_on",
+        service_data={"entity_id": entity_id},
+        trace_id=trace_id,
+        dry_run=dry_run,
+    )
+    if not wake_response.success:
+        return ToolCallResponse(
+            success=False,
+            message=f"{first.message}; auto_turn_on_failed: {wake_response.message}",
+            trace_id=trace_id,
+            data={
+                "first_attempt": first.data,
+                "turn_on_attempt": wake_response.data,
+            },
+        )
+
+    await asyncio.sleep(0.5)
+    retry = await execute_ha_service_call(
+        tool_name=item.tool_name,
+        strategy=item.strategy,
+        domain="climate",
+        service=item.service,
+        service_data=service_data,
+        trace_id=trace_id,
+        dry_run=dry_run,
+    )
+    if retry.success:
+        merged = dict(retry.data or {})
+        merged["retry_after_turn_on"] = True
+        merged["turn_on_attempt"] = wake_response.data
+        return ToolCallResponse(
+            success=True,
+            message="HA call succeeded after turn_on retry",
+            trace_id=trace_id,
+            data=merged,
+        )
+
+    return ToolCallResponse(
+        success=False,
+        message=f"{retry.message}; retry_after_turn_on_failed",
+        trace_id=trace_id,
+        data={
+            "first_attempt": first.data,
+            "turn_on_attempt": wake_response.data,
+            "retry_attempt": retry.data,
+        },
+    )
+
+
+def should_retry_climate_temperature(response: ToolCallResponse) -> bool:
+    if response.success:
+        return False
+    message = str(response.message or "").lower()
+    if "ha call failed: 500" in message:
+        return True
+    # Some integrations may return transient bridge/network errors when HVAC is off.
+    if "ha bridge error" in message:
+        return True
+    return False
 
 
 def _encoding_error_to_http(ex: EncodingNormalizationError) -> HTTPException:
