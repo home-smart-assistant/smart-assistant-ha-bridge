@@ -5,7 +5,8 @@ from unittest.mock import patch
 
 from fastapi import HTTPException
 
-from app.services.ha_service import resolve_area_entity
+from app.models.schemas import ToolCatalogItem
+from app.services.ha_service import resolve_area_entity, resolve_service_data
 
 
 class TestAreaResolutionGuardrail(unittest.IsolatedAsyncioTestCase):
@@ -45,6 +46,29 @@ class TestAreaResolutionGuardrail(unittest.IsolatedAsyncioTestCase):
         }
         resolved = await resolve_area_entity("cover", merged_args)
         self.assertEqual("cover.yang_tai_sha_lian", resolved)
+
+    async def test_area_is_required_without_entity_id(self) -> None:
+        with self.assertRaises(HTTPException) as ex:
+            await resolve_area_entity("cover", {})
+        self.assertEqual(400, ex.exception.status_code)
+        self.assertIn("area is required for cover strategy", str(ex.exception.detail))
+
+    async def test_service_data_ignores_catalog_default_area_fallback(self) -> None:
+        item = ToolCatalogItem(
+            tool_name="home.lights.on",
+            domain="auto",
+            service="turn_on",
+            strategy="light_area",
+            enabled=True,
+            default_arguments={
+                "area": "living_room",
+                "area_entity_map": {"living_room": "switch.living_room_light"},
+            },
+        )
+        with self.assertRaises(HTTPException) as ex:
+            await resolve_service_data(item, {})
+        self.assertEqual(400, ex.exception.status_code)
+        self.assertIn("area is required for light strategy", str(ex.exception.detail))
 
 
 if __name__ == "__main__":

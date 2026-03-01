@@ -565,32 +565,6 @@ def _parse_area_list(raw: Any) -> list[str]:
     return []
 
 
-def _find_entity_for_area_map(
-    area_map: dict[str, str | list[str]],
-    *,
-    area_candidates: list[str],
-) -> str | list[str] | None:
-    if not area_map:
-        return None
-
-    normalized_map: dict[str, str | list[str]] = {}
-    for key, value in area_map.items():
-        normalized = _normalize_area_label(key)
-        if not normalized:
-            continue
-        normalized_map[normalized] = value
-
-    for area in area_candidates:
-        normalized = _normalize_area_label(area)
-        if not normalized:
-            continue
-        raw_entity = normalized_map.get(normalized)
-        parsed = parse_entity_ids(raw_entity)
-        if parsed is not None:
-            return parsed
-    return None
-
-
 def _collect_area_match_tokens(*, area_id: str, area_name: str) -> set[str]:
     tokens: set[str] = set()
     for value in (area_id, area_name):
@@ -644,10 +618,12 @@ async def _resolve_entities_from_ha_area(
     if not candidate_norms:
         return None
 
-    try:
-        areas_result = await get_ha_areas(include_state_validation=False)
-    except Exception:
-        return None
+    areas_result = await get_ha_areas(include_state_validation=False)
+    if not areas_result.get("success", False):
+        reason = "; ".join(str(x) for x in areas_result.get("errors", []) if str(x).strip())
+        if not reason:
+            reason = "failed to fetch HA areas"
+        raise HTTPException(status_code=503, detail=f"ha areas unavailable: {reason}")
 
     rows = areas_result.get("areas", [])
     if not isinstance(rows, list):
@@ -690,40 +666,43 @@ async def _resolve_all_entities_from_ha(
 
     included_from_areas: list[str] = []
     assigned_all: set[str] = set()
-    try:
-        areas_result = await get_ha_areas(include_state_validation=False)
-        area_rows = areas_result.get("areas", [])
-        if isinstance(area_rows, list):
-            for row in area_rows:
-                if not isinstance(row, dict):
+
+    areas_result = await get_ha_areas(include_state_validation=False)
+    if not areas_result.get("success", False):
+        reason = "; ".join(str(x) for x in areas_result.get("errors", []) if str(x).strip())
+        if not reason:
+            reason = "failed to fetch HA areas"
+        raise HTTPException(status_code=503, detail=f"ha areas unavailable: {reason}")
+
+    area_rows = areas_result.get("areas", [])
+    if isinstance(area_rows, list):
+        for row in area_rows:
+            if not isinstance(row, dict):
+                continue
+            area_id = str(row.get("area_id", "")).strip()
+            area_name = str(row.get("area_name", "")).strip() or area_id
+            if not area_id:
+                continue
+            source = row.get("ha_entities")
+            if not isinstance(source, list) or not source:
+                source = row.get("entities")
+            entity_ids = _to_entity_id_list(source)
+            matched = _filter_entities_by_type(entity_ids, entity_type=entity_type)
+            for entity_id in matched:
+                assigned_all.add(entity_id)
+            if excluded_norms:
+                row_tokens = _collect_area_match_tokens(area_id=area_id, area_name=area_name)
+                if row_tokens.intersection(excluded_norms):
                     continue
-                area_id = str(row.get("area_id", "")).strip()
-                area_name = str(row.get("area_name", "")).strip() or area_id
-                if not area_id:
-                    continue
-                source = row.get("ha_entities")
-                if not isinstance(source, list) or not source:
-                    source = row.get("entities")
-                entity_ids = _to_entity_id_list(source)
-                matched = _filter_entities_by_type(entity_ids, entity_type=entity_type)
-                for entity_id in matched:
-                    assigned_all.add(entity_id)
-                if excluded_norms:
-                    row_tokens = _collect_area_match_tokens(area_id=area_id, area_name=area_name)
-                    if row_tokens.intersection(excluded_norms):
-                        continue
-                included_from_areas.extend(matched)
-    except Exception:
-        included_from_areas = []
-        assigned_all = set()
+            included_from_areas.extend(matched)
 
     states_result = await fetch_ha_states_raw()
     if not states_result.get("ok"):
-        return None
+        raise HTTPException(status_code=503, detail=f"ha states unavailable: {states_result.get('error', 'unknown error')}")
 
     rows = states_result.get("data", [])
     if not isinstance(rows, list):
-        return None
+        raise HTTPException(status_code=503, detail="ha states unavailable: invalid payload")
 
     all_from_states: list[str] = []
     for row in rows:
@@ -1879,8 +1858,6 @@ async def sync_ha_areas(
 
 async def build_context_summary() -> dict[str, Any]:
     catalog = get_catalog_snapshot()
-    known_entities = build_known_entities()
-    entity_ids = flatten_known_entity_ids(known_entities)
 
     enabled_tools = sorted(
         (item.model_dump(mode="json") for item in catalog.values() if item.enabled),
@@ -1891,7 +1868,7 @@ async def build_context_summary() -> dict[str, Any]:
         "ha_base_url": settings.HA_BASE_URL,
         "ha_connected": False,
         "tool_catalog": enabled_tools,
-        "known_entities": known_entities,
+        "known_entities": {},
         "entity_states": {},
         "ha_services": [],
     }
@@ -1899,6 +1876,12 @@ async def build_context_summary() -> dict[str, Any]:
     if not settings.HA_TOKEN:
         context["message"] = "HA token missing"
         return context
+
+    areas_result = await get_ha_areas(include_state_validation=False)
+    area_rows = areas_result.get("areas", []) if isinstance(areas_result.get("areas"), list) else []
+    known_entities = build_known_entities(area_rows)
+    entity_ids = flatten_known_entity_ids(known_entities)
+    context["known_entities"] = known_entities
 
     services_task = fetch_ha_services()
     states_task = fetch_entity_states(entity_ids)
@@ -1910,6 +1893,9 @@ async def build_context_summary() -> dict[str, Any]:
     context["entity_states"] = states_result.get("data", {})
 
     errors = [x for x in [services_result.get("error"), states_result.get("error")] if x]
+    area_errors = areas_result.get("errors")
+    if isinstance(area_errors, list):
+        errors.extend(str(item) for item in area_errors if str(item).strip())
     if errors:
         context["errors"] = errors
 
@@ -1917,31 +1903,35 @@ async def build_context_summary() -> dict[str, Any]:
 
 
 async def resolve_service_data(item: ToolCatalogItem, arguments: dict[str, Any]) -> dict[str, Any]:
-    merged = dict(item.default_arguments)
-    merged.update(arguments)
+    strategy = item.strategy.strip().lower()
+    if strategy in {"light_area", "cover_area", "climate_area", "climate_area_temperature"}:
+        merged = dict(arguments)
+    else:
+        merged = dict(item.default_arguments)
+        merged.update(arguments)
 
-    if item.strategy == "passthrough":
+    if strategy == "passthrough":
         return merged
 
-    if item.strategy == "light_area":
+    if strategy == "light_area":
         entity_id = await resolve_area_entity("light", merged)
         return {"entity_id": entity_id}
 
-    if item.strategy == "cover_area":
+    if strategy == "cover_area":
         entity_id = await resolve_area_entity("cover", merged)
         return {"entity_id": entity_id}
 
-    if item.strategy == "scene_id":
+    if strategy == "scene_id":
         scene_id = str(merged.get("scene_id", "")).strip()
         if not scene_id:
             raise HTTPException(status_code=400, detail="scene_id is required")
         return {"entity_id": scene_id}
 
-    if item.strategy == "climate_area":
+    if strategy == "climate_area":
         entity_id = await resolve_area_entity("climate", merged)
         return {"entity_id": entity_id}
 
-    if item.strategy == "climate_area_temperature":
+    if strategy == "climate_area_temperature":
         entity_id = await resolve_area_entity("climate", merged)
         temp_raw = merged.get("temperature")
         if temp_raw is None:
@@ -1954,7 +1944,7 @@ async def resolve_service_data(item: ToolCatalogItem, arguments: dict[str, Any])
             raise HTTPException(status_code=400, detail="temperature must be between 16 and 30")
         return {"entity_id": entity_id, "temperature": temperature}
 
-    raise HTTPException(status_code=400, detail=f"unsupported strategy: {item.strategy}")
+    raise HTTPException(status_code=400, detail=f"unsupported strategy: {strategy}")
 
 
 def resolve_domain(item: ToolCatalogItem, service_data: dict[str, Any]) -> str:
@@ -1968,13 +1958,20 @@ async def resolve_area_entity(entity_type: str, merged_args: dict[str, Any]) -> 
     if explicit is not None:
         return explicit
 
-    area_raw = merged_args.get("area", "living_room")
+    area_raw = merged_args.get("area")
+    if area_raw is None or not str(area_raw).strip():
+        raise HTTPException(
+            status_code=400,
+            detail=f"area is required for {entity_type} strategy when entity_id is absent",
+        )
+
     area = str(area_raw).strip().lower()
     exclude_areas = _parse_area_list(merged_args.get("exclude_areas"))
     if _is_all_area_request(area_raw):
         all_entities = await _resolve_all_entities_from_ha(entity_type, exclude_areas=exclude_areas)
         if all_entities is not None:
             return all_entities
+        raise HTTPException(status_code=400, detail=f"{entity_type} entities not found for area: all")
 
     area_candidates = _iter_area_lookup_candidates(area)
 
@@ -1982,40 +1979,7 @@ async def resolve_area_entity(entity_type: str, merged_args: dict[str, Any]) -> 
     if from_ha is not None:
         return from_ha
 
-    area_map = extract_area_entity_map(merged_args.get("area_entity_map"), entity_type=entity_type)
-    if not area_map:
-        raw_area_map = settings.AREA_ENTITY_MAP.get(entity_type, {})
-        for key, value in raw_area_map.items():
-            parsed = parse_entity_ids(value)
-            if parsed is not None:
-                area_map[str(key).strip().lower()] = parsed
-
-    entity_id = _find_entity_for_area_map(area_map, area_candidates=area_candidates)
-    if entity_id is not None:
-        return entity_id
-
     raise HTTPException(status_code=400, detail=f"{entity_type} entity is not configured for area: {area}")
-
-
-def extract_area_entity_map(raw: Any, *, entity_type: str) -> dict[str, str | list[str]]:
-    if not isinstance(raw, dict):
-        return {}
-
-    source = raw
-    nested = raw.get(entity_type)
-    if isinstance(nested, dict):
-        source = nested
-
-    resolved: dict[str, str | list[str]] = {}
-    for area, value in source.items():
-        normalized_area = str(area).strip().lower()
-        if not normalized_area:
-            continue
-        parsed = parse_entity_ids(value)
-        if parsed is None:
-            continue
-        resolved[normalized_area] = parsed
-    return resolved
 
 
 def parse_entity_ids(raw: Any) -> str | list[str] | None:
@@ -2103,39 +2067,29 @@ def merge_entity_refs(
     return deduped
 
 
-def strategy_to_entity_type(strategy: str) -> str | None:
-    normalized = strategy.strip().lower()
-    if normalized == "light_area":
-        return "light"
-    if normalized == "cover_area":
-        return "cover"
-    if normalized in {"climate_area", "climate_area_temperature"}:
-        return "climate"
-    return None
-
-
-def build_known_entities() -> dict[str, dict[str, str | list[str] | None]]:
+def build_known_entities(area_rows: list[dict[str, Any]]) -> dict[str, dict[str, str | list[str] | None]]:
     known: dict[str, dict[str, str | list[str] | None]] = {}
-    for entity_type, area_map in settings.AREA_ENTITY_MAP.items():
-        known[entity_type] = {}
-        for area, raw in area_map.items():
-            parsed = parse_entity_ids(raw)
-            if parsed is not None:
-                known[entity_type][str(area).strip().lower()] = parsed
+    for row in area_rows:
+        if not isinstance(row, dict):
+            continue
+        area_id = str(row.get("area_id", "")).strip().lower()
+        if not area_id:
+            continue
 
-    catalog = get_catalog_snapshot()
-    for item in catalog.values():
-        if not item.enabled:
+        source = row.get("ha_entities")
+        if not isinstance(source, list) or not source:
+            source = row.get("entities")
+        entity_ids = _to_entity_id_list(source)
+        if not entity_ids:
             continue
-        entity_type = strategy_to_entity_type(item.strategy)
-        if entity_type is None:
-            continue
-        area_map = extract_area_entity_map(item.default_arguments.get("area_entity_map"), entity_type=entity_type)
-        if not area_map:
-            continue
-        bucket = known.setdefault(entity_type, {})
-        for area, entity_ref in area_map.items():
-            bucket[area] = merge_entity_refs(bucket.get(area), entity_ref)
+
+        for entity_type in ENTITY_TYPE_DOMAIN_CANDIDATES:
+            matched = _filter_entities_by_type(entity_ids, entity_type=entity_type)
+            parsed = parse_entity_ids(matched)
+            if parsed is None:
+                continue
+            bucket = known.setdefault(entity_type, {})
+            bucket[area_id] = merge_entity_refs(bucket.get(area_id), parsed)
 
     return known
 
@@ -2315,21 +2269,6 @@ def _to_entity_id_list(raw: Any) -> list[str]:
     return [str(parsed).strip()]
 
 
-def _build_config_area_map() -> dict[str, list[str]]:
-    area_map: dict[str, list[str]] = {}
-    known_entities = build_known_entities()
-    for group in known_entities.values():
-        for area, raw in group.items():
-            ids = _to_entity_id_list(raw)
-            if area not in area_map:
-                area_map[area] = []
-            area_map[area].extend(ids)
-
-    for area in list(area_map.keys()):
-        area_map[area] = list(dict.fromkeys(area_map[area]))
-    return area_map
-
-
 async def fetch_ha_states_raw() -> dict[str, Any]:
     if not settings.HA_TOKEN:
         return {"ok": False, "error": "HA token missing", "data": []}
@@ -2482,7 +2421,6 @@ def _match_area(areas: list[dict[str, Any]], area_input: str) -> dict[str, Any] 
 
 
 async def get_ha_areas(include_state_validation: bool = True) -> dict[str, Any]:
-    config_map = _build_config_area_map()
     template_result = await render_ha_template_json(AREA_CATALOG_TEMPLATE, context="ha.areas")
     errors: list[str] = []
 
@@ -2514,17 +2452,7 @@ async def get_ha_areas(include_state_validation: bool = True) -> dict[str, Any]:
     for row in ha_area_rows:
         area_index[row["area_id"]] = row
 
-    for area_id, entities in config_map.items():
-        if area_id not in area_index:
-            area_index[area_id] = {
-                "area_id": area_id,
-                "area_name": area_id.replace("_", " ").title(),
-                "ha_entities": [],
-            }
-        area_index[area_id]["configured_entities"] = entities
-
     state_ids: set[str] = set()
-    state_error: str | None = None
     if include_state_validation:
         states_result = await fetch_ha_states_raw()
         if states_result.get("ok"):
@@ -2534,15 +2462,14 @@ async def get_ha_areas(include_state_validation: bool = True) -> dict[str, Any]:
                     if entity_id:
                         state_ids.add(entity_id)
         else:
-            state_error = str(states_result.get("error", "failed to fetch states"))
-            errors.append(state_error)
+            errors.append(str(states_result.get("error", "failed to fetch states")))
 
     areas: list[dict[str, Any]] = []
     for area_id in sorted(area_index.keys()):
         row = area_index[area_id]
         ha_entities = _to_entity_id_list(row.get("ha_entities"))
-        configured_entities = _to_entity_id_list(row.get("configured_entities"))
-        merged_entities = list(dict.fromkeys(ha_entities + configured_entities))
+        configured_entities: list[str] = []
+        merged_entities = list(dict.fromkeys(ha_entities))
         area_item: dict[str, Any] = {
             "area_id": area_id,
             "area_name": row.get("area_name", area_id.replace("_", " ").title()),
@@ -2559,8 +2486,8 @@ async def get_ha_areas(include_state_validation: bool = True) -> dict[str, Any]:
             area_item["missing_count"] = len(missing)
         areas.append(area_item)
 
-    success = bool(areas) or template_result.get("ok")
-    source = "ha_template+config_map" if template_result.get("ok") else "config_map"
+    success = bool(template_result.get("ok"))
+    source = "ha_template"
     result: dict[str, Any] = {
         "success": success,
         "source": source,

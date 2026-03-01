@@ -98,37 +98,6 @@ HA_LOG_RETENTION_DAYS = max(1, env_int("HA_LOG_RETENTION_DAYS", 14))
 HA_LOG_QUEUE_MAX = max(100, env_int("HA_LOG_QUEUE_MAX", 5000))
 UI_PAGE_PATH = APP_DIR / "web" / "ui.html"
 
-# Entity mapping can be overridden by environment variables.
-HA_LIGHT_LIVING_ROOM_ENTITY_ID = env_str("HA_LIGHT_LIVING_ROOM_ENTITY_ID", "light.living_room")
-HA_LIGHT_BEDROOM_ENTITY_ID = env_str("HA_LIGHT_BEDROOM_ENTITY_ID", "light.bedroom")
-HA_LIGHT_STUDY_ENTITY_ID = env_str("HA_LIGHT_STUDY_ENTITY_ID", "light.study")
-HA_CLIMATE_LIVING_ROOM_ENTITY_ID = env_str("HA_CLIMATE_LIVING_ROOM_ENTITY_ID", "climate.living_room_ac")
-HA_CLIMATE_BEDROOM_ENTITY_ID = env_str("HA_CLIMATE_BEDROOM_ENTITY_ID", "climate.bedroom_ac")
-HA_CLIMATE_STUDY_ENTITY_ID = env_str("HA_CLIMATE_STUDY_ENTITY_ID", "climate.study_ac")
-HA_COVER_LIVING_ROOM_ENTITY_ID = env_str("HA_COVER_LIVING_ROOM_ENTITY_ID", "cover.living_room")
-HA_COVER_BEDROOM_ENTITY_ID = env_str("HA_COVER_BEDROOM_ENTITY_ID", "cover.bedroom")
-HA_COVER_STUDY_ENTITY_ID = env_str("HA_COVER_STUDY_ENTITY_ID", "cover.study")
-HA_COVER_BALCONY_ENTITY_ID = env_str("HA_COVER_BALCONY_ENTITY_ID", "")
-
-AREA_ENTITY_MAP = {
-    "light": {
-        "living_room": HA_LIGHT_LIVING_ROOM_ENTITY_ID,
-        "bedroom": HA_LIGHT_BEDROOM_ENTITY_ID,
-        "study": HA_LIGHT_STUDY_ENTITY_ID,
-    },
-    "climate": {
-        "living_room": HA_CLIMATE_LIVING_ROOM_ENTITY_ID,
-        "bedroom": HA_CLIMATE_BEDROOM_ENTITY_ID,
-        "study": HA_CLIMATE_STUDY_ENTITY_ID,
-    },
-    "cover": {
-        "living_room": HA_COVER_LIVING_ROOM_ENTITY_ID,
-        "bedroom": HA_COVER_BEDROOM_ENTITY_ID,
-        "study": HA_COVER_STUDY_ENTITY_ID,
-        "balcony": HA_COVER_BALCONY_ENTITY_ID,
-    },
-}
-
 runtime_config_lock = RLock()
 catalog_lock = RLock()
 storage_lock = RLock()
