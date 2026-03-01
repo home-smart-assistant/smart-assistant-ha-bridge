@@ -576,27 +576,24 @@ async def _resolve_entities_from_ha_area(
 
 
 async def _resolve_all_entities_from_ha(entity_type: str) -> str | list[str] | None:
-    try:
-        areas_result = await get_ha_areas(include_state_validation=False)
-    except Exception:
-        return None
-
-    rows = areas_result.get("areas", [])
-    if not isinstance(rows, list):
+    states_result = await fetch_ha_states_raw()
+    if not states_result.get("ok"):
         return None
 
     collected: list[str] = []
+    rows = states_result.get("data", [])
+    if not isinstance(rows, list):
+        return None
+
     for row in rows:
         if not isinstance(row, dict):
             continue
-        source = row.get("ha_entities")
-        if not isinstance(source, list) or not source:
-            source = row.get("entities")
-        entity_ids = _to_entity_id_list(source)
-        matched = _filter_entities_by_type(entity_ids, entity_type=entity_type)
-        collected.extend(matched)
+        entity_id = str(row.get("entity_id", "")).strip()
+        if entity_id:
+            collected.append(entity_id)
 
-    return parse_entity_ids(list(dict.fromkeys(collected)))
+    matched = _filter_entities_by_type(collected, entity_type=entity_type)
+    return parse_entity_ids(matched)
 
 
 def _normalize_target_areas(raw: Any) -> list[str]:
