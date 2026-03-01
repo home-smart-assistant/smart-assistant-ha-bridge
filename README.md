@@ -104,7 +104,7 @@ Entity mapping:
   - `ghcr.io/home-smart-assistant/smart-assistant-ha-bridge:<commit_sha>`
 - Deploy target service: `smart_assistant_ha_bridge` in `/opt/smart-assistant/docker-compose.yml`
 - Runner labels:
-  - Build: `[self-hosted, Windows, X64, builder-win]` (recommended on `192.168.3.11`)
+  - Build: `[self-hosted, Linux, X64, builder-linux-11]` (recommended on `192.168.3.11` via WSL2 Ubuntu runner)
   - Deploy: `[self-hosted, Linux, X64, deploy-linux]` (recommended on `192.168.3.103`)
 - Optional config:
   - Repository variable `DEPLOY_PATH` (default `/opt/smart-assistant`)
