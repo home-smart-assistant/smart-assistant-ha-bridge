@@ -464,6 +464,15 @@ def _is_all_area_request(raw: Any) -> bool:
     return normalized in {_normalize_area_label(alias) for alias in ALL_AREA_ALIASES}
 
 
+def _parse_area_list(raw: Any) -> list[str]:
+    if isinstance(raw, str):
+        values = [item.strip() for item in raw.split(",") if item.strip()]
+        return values
+    if isinstance(raw, (list, tuple, set)):
+        return [str(item).strip() for item in raw if str(item).strip()]
+    return []
+
+
 def _find_entity_for_area_map(
     area_map: dict[str, str | list[str]],
     *,
@@ -575,25 +584,69 @@ async def _resolve_entities_from_ha_area(
     return None
 
 
-async def _resolve_all_entities_from_ha(entity_type: str) -> str | list[str] | None:
+async def _resolve_all_entities_from_ha(
+    entity_type: str,
+    *,
+    exclude_areas: list[str] | None = None,
+) -> str | list[str] | None:
+    excluded_norms: set[str] = set()
+    for area in exclude_areas or []:
+        for candidate in _iter_area_lookup_candidates(area):
+            normalized = _normalize_area_label(candidate)
+            if normalized:
+                excluded_norms.add(normalized)
+
+    included_from_areas: list[str] = []
+    assigned_all: set[str] = set()
+    try:
+        areas_result = await get_ha_areas(include_state_validation=False)
+        area_rows = areas_result.get("areas", [])
+        if isinstance(area_rows, list):
+            for row in area_rows:
+                if not isinstance(row, dict):
+                    continue
+                area_id = str(row.get("area_id", "")).strip()
+                area_name = str(row.get("area_name", "")).strip() or area_id
+                if not area_id:
+                    continue
+                source = row.get("ha_entities")
+                if not isinstance(source, list) or not source:
+                    source = row.get("entities")
+                entity_ids = _to_entity_id_list(source)
+                matched = _filter_entities_by_type(entity_ids, entity_type=entity_type)
+                for entity_id in matched:
+                    assigned_all.add(entity_id)
+                if excluded_norms:
+                    row_tokens = _collect_area_match_tokens(area_id=area_id, area_name=area_name)
+                    if row_tokens.intersection(excluded_norms):
+                        continue
+                included_from_areas.extend(matched)
+    except Exception:
+        included_from_areas = []
+        assigned_all = set()
+
     states_result = await fetch_ha_states_raw()
     if not states_result.get("ok"):
         return None
 
-    collected: list[str] = []
     rows = states_result.get("data", [])
     if not isinstance(rows, list):
         return None
 
+    all_from_states: list[str] = []
     for row in rows:
         if not isinstance(row, dict):
             continue
         entity_id = str(row.get("entity_id", "")).strip()
         if entity_id:
-            collected.append(entity_id)
+            all_from_states.append(entity_id)
 
-    matched = _filter_entities_by_type(collected, entity_type=entity_type)
-    return parse_entity_ids(matched)
+    matched_all = _filter_entities_by_type(all_from_states, entity_type=entity_type)
+    unassigned = [entity_id for entity_id in matched_all if entity_id not in assigned_all]
+    merged = list(dict.fromkeys(included_from_areas + unassigned))
+    if merged:
+        return parse_entity_ids(merged)
+    return parse_entity_ids(matched_all)
 
 
 def _normalize_target_areas(raw: Any) -> list[str]:
@@ -1825,8 +1878,9 @@ async def resolve_area_entity(entity_type: str, merged_args: dict[str, Any]) -> 
 
     area_raw = merged_args.get("area", "living_room")
     area = str(area_raw).strip().lower()
+    exclude_areas = _parse_area_list(merged_args.get("exclude_areas"))
     if _is_all_area_request(area_raw):
-        all_entities = await _resolve_all_entities_from_ha(entity_type)
+        all_entities = await _resolve_all_entities_from_ha(entity_type, exclude_areas=exclude_areas)
         if all_entities is not None:
             return all_entities
 
