@@ -1,0 +1,51 @@
+from __future__ import annotations
+
+import unittest
+from unittest.mock import patch
+
+from fastapi import HTTPException
+
+from app.services.ha_service import resolve_area_entity
+
+
+class TestAreaResolutionGuardrail(unittest.IsolatedAsyncioTestCase):
+    async def test_cover_area_not_found_returns_400_instead_of_living_room_fallback(self) -> None:
+        async def fake_get_ha_areas(*, include_state_validation: bool = True):  # noqa: ARG001
+            return {
+                "success": True,
+                "areas": [
+                    {
+                        "area_id": "living_room",
+                        "area_name": "客厅",
+                        "ha_entities": ["cover.living_room"],
+                    }
+                ],
+            }
+
+        merged_args = {
+            "area": "balcony",
+            "area_entity_map": {
+                "living_room": "cover.living_room",
+            },
+        }
+        with patch("app.services.ha_service.get_ha_areas", new=fake_get_ha_areas):
+            with self.assertRaises(HTTPException) as ex:
+                await resolve_area_entity("cover", merged_args)
+
+        self.assertEqual(400, ex.exception.status_code)
+        self.assertIn("cover entity is not configured for area: balcony", str(ex.exception.detail))
+
+    async def test_explicit_entity_id_still_supported(self) -> None:
+        merged_args = {
+            "area": "balcony",
+            "entity_id": "cover.yang_tai_sha_lian",
+            "area_entity_map": {
+                "living_room": "cover.living_room",
+            },
+        }
+        resolved = await resolve_area_entity("cover", merged_args)
+        self.assertEqual("cover.yang_tai_sha_lian", resolved)
+
+
+if __name__ == "__main__":
+    unittest.main()

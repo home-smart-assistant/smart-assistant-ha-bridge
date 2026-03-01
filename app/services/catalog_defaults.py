@@ -145,7 +145,7 @@ def default_tool_catalog_items() -> list[ToolCatalogItem]:
             strategy="area_sync",
             description="Ensure target HA areas exist and optionally delete unused areas",
             default_arguments={
-                "target_areas": ["玄关", "厨房", "客厅", "主卧", "次卧", "餐厅", "书房", "卫生间", "走廊"],
+                "target_areas": ["玄关", "厨房", "客厅", "主卧", "次卧", "餐厅", "书房", "卫生间", "走廊", "阳台"],
                 "delete_unused": True,
                 "force_delete_in_use": False,
             },
@@ -158,7 +158,7 @@ def default_tool_catalog_items() -> list[ToolCatalogItem]:
             strategy="area_audit",
             description="Audit entity area assignment and suggest target area for unassigned entities",
             default_arguments={
-                "target_areas": ["玄关", "厨房", "客厅", "主卧", "次卧", "餐厅", "书房", "卫生间", "走廊"],
+                "target_areas": ["玄关", "厨房", "客厅", "主卧", "次卧", "餐厅", "书房", "卫生间", "走廊", "阳台"],
                 "domains": ["light", "switch", "climate", "cover", "fan"],
                 "include_unavailable": False,
             },
@@ -171,7 +171,7 @@ def default_tool_catalog_items() -> list[ToolCatalogItem]:
             strategy="area_assign",
             description="Assign unassigned entities to HA areas based on audit suggestions",
             default_arguments={
-                "target_areas": ["玄关", "厨房", "客厅", "主卧", "次卧", "餐厅", "书房", "卫生间", "走廊"],
+                "target_areas": ["玄关", "厨房", "客厅", "主卧", "次卧", "餐厅", "书房", "卫生间", "走廊", "阳台"],
                 "domains": ["light", "switch", "climate", "cover", "fan"],
                 "include_unavailable": False,
                 "only_with_suggestion": True,
@@ -331,7 +331,7 @@ def default_api_catalog_items() -> list[ApiCatalogItem]:
             path="/v1/ha/areas/sync",
             description="同步目标房间列表，并可删除未使用房间。",
             request_example={
-                "target_areas": ["玄关", "厨房", "客厅", "主卧", "次卧", "餐厅", "书房", "卫生间", "走廊"],
+                "target_areas": ["玄关", "厨房", "客厅", "主卧", "次卧", "餐厅", "书房", "卫生间", "走廊", "阳台"],
                 "delete_unused": True,
                 "force_delete_in_use": False,
                 "trace_id": "agent-area-sync-001",
@@ -346,7 +346,7 @@ def default_api_catalog_items() -> list[ApiCatalogItem]:
             path="/v1/ha/areas/audit",
             description="按目标房间审计实体归属，返回未归属实体与建议归属房间。",
             request_example={
-                "target_areas": ["玄关", "厨房", "客厅", "主卧", "次卧", "餐厅", "书房", "卫生间", "走廊"],
+                "target_areas": ["玄关", "厨房", "客厅", "主卧", "次卧", "餐厅", "书房", "卫生间", "走廊", "阳台"],
                 "domains": ["light", "switch", "climate", "cover", "fan"],
                 "include_unavailable": False,
                 "trace_id": "agent-area-audit-001",
@@ -361,7 +361,7 @@ def default_api_catalog_items() -> list[ApiCatalogItem]:
             path="/v1/ha/areas/assign",
             description="将未归属实体按建议房间批量回写到 HA 区域。",
             request_example={
-                "target_areas": ["玄关", "厨房", "客厅", "主卧", "次卧", "餐厅", "书房", "卫生间", "走廊"],
+                "target_areas": ["玄关", "厨房", "客厅", "主卧", "次卧", "餐厅", "书房", "卫生间", "走廊", "阳台"],
                 "domains": ["light", "switch", "climate", "cover", "fan"],
                 "include_unavailable": False,
                 "only_with_suggestion": True,
@@ -434,3 +434,4 @@ def default_api_catalog_items() -> list[ApiCatalogItem]:
             sort_order=140,
         ),
     ]
+

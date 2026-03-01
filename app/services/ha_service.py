@@ -1994,22 +1994,7 @@ async def resolve_area_entity(entity_type: str, merged_args: dict[str, Any]) -> 
     if entity_id is not None:
         return entity_id
 
-    living_room_fallback = _find_entity_for_area_map(area_map, area_candidates=["living_room", "客厅"])
-    if living_room_fallback is not None:
-        return living_room_fallback
-
-    raw_entity: Any = None
-    if raw_entity is None:
-        for candidate in area_map.values():
-            parsed_candidate = parse_entity_ids(candidate)
-            if parsed_candidate is not None:
-                raw_entity = parsed_candidate
-                break
-
-    entity_id = parse_entity_ids(raw_entity)
-    if entity_id is None:
-        raise HTTPException(status_code=400, detail=f"{entity_type} entity is not configured for area: {area}")
-    return entity_id
+    raise HTTPException(status_code=400, detail=f"{entity_type} entity is not configured for area: {area}")
 
 
 def extract_area_entity_map(raw: Any, *, entity_type: str) -> dict[str, str | list[str]]:

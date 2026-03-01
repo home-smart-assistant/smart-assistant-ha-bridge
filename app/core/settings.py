@@ -108,6 +108,7 @@ HA_CLIMATE_STUDY_ENTITY_ID = env_str("HA_CLIMATE_STUDY_ENTITY_ID", "climate.stud
 HA_COVER_LIVING_ROOM_ENTITY_ID = env_str("HA_COVER_LIVING_ROOM_ENTITY_ID", "cover.living_room")
 HA_COVER_BEDROOM_ENTITY_ID = env_str("HA_COVER_BEDROOM_ENTITY_ID", "cover.bedroom")
 HA_COVER_STUDY_ENTITY_ID = env_str("HA_COVER_STUDY_ENTITY_ID", "cover.study")
+HA_COVER_BALCONY_ENTITY_ID = env_str("HA_COVER_BALCONY_ENTITY_ID", "")
 
 AREA_ENTITY_MAP = {
     "light": {
@@ -124,6 +125,7 @@ AREA_ENTITY_MAP = {
         "living_room": HA_COVER_LIVING_ROOM_ENTITY_ID,
         "bedroom": HA_COVER_BEDROOM_ENTITY_ID,
         "study": HA_COVER_STUDY_ENTITY_ID,
+        "balcony": HA_COVER_BALCONY_ENTITY_ID,
     },
 }
 
