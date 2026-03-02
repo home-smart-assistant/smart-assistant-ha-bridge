@@ -10,6 +10,26 @@ from app.services.ha_service import resolve_area_entity, resolve_service_data
 
 
 class TestAreaResolutionGuardrail(unittest.IsolatedAsyncioTestCase):
+    async def test_cover_area_balcony_without_exact_ha_match_returns_400(self) -> None:
+        async def fake_get_ha_areas(*, include_state_validation: bool = True):  # noqa: ARG001
+            return {
+                "success": True,
+                "areas": [
+                    {
+                        "area_id": "yang_tai",
+                        "area_name": "阳台",
+                        "ha_entities": ["cover.yang_tai_chuang_lian", "cover.yang_tai_sha_lian"],
+                    }
+                ],
+            }
+
+        with patch("app.services.ha_service.get_ha_areas", new=fake_get_ha_areas):
+            with self.assertRaises(HTTPException) as ex:
+                await resolve_area_entity("cover", {"area": "balcony"})
+
+        self.assertEqual(400, ex.exception.status_code)
+        self.assertIn("cover entity is not configured for area: balcony", str(ex.exception.detail))
+
     async def test_cover_area_not_found_returns_400_instead_of_living_room_fallback(self) -> None:
         async def fake_get_ha_areas(*, include_state_validation: bool = True):  # noqa: ARG001
             return {

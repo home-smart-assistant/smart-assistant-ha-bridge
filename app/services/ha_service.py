@@ -523,7 +523,7 @@ def _canonical_area_name(raw: Any) -> str:
 def _iter_area_lookup_candidates(raw: Any) -> list[str]:
     text = str(raw or "").strip()
     if not text:
-        return ["living_room", "客厅"]
+        return []
 
     candidates: list[str] = []
     seen: set[str] = set()
@@ -2693,3 +2693,4 @@ async def get_ha_overview() -> dict[str, Any]:
         "areas_source": areas_result.get("source"),
         "errors": [x for x in [states_result.get("error"), services_result.get("message")] if x],
     }
+
