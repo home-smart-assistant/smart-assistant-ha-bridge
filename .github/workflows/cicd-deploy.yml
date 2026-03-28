@@ -123,7 +123,7 @@ jobs:
           retry 6 8 docker compose pull "$SERVICE_NAME"
           retry 3 5 docker compose up -d --no-deps "$SERVICE_NAME"
 
-          BRIDGE_PORT_VALUE="$(grep '^BRIDGE_PORT=' .env | tail -n 1 | cut -d'=' -f2)"
+          BRIDGE_PORT_VALUE="$(sed -n 's/^BRIDGE_PORT=//p' .env | tail -n 1)"
           if [ -z "${BRIDGE_PORT_VALUE}" ]; then
             BRIDGE_PORT_VALUE="8092"
           fi
