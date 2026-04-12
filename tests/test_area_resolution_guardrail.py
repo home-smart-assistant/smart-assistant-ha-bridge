@@ -10,7 +10,7 @@ from app.services.ha_service import resolve_area_entity, resolve_service_data
 
 
 class TestAreaResolutionGuardrail(unittest.IsolatedAsyncioTestCase):
-    async def test_cover_area_balcony_without_exact_ha_match_returns_400(self) -> None:
+    async def test_cover_area_balcony_without_cover_entities_returns_400(self) -> None:
         async def fake_get_ha_areas(*, include_state_validation: bool = True):  # noqa: ARG001
             return {
                 "success": True,
@@ -18,7 +18,7 @@ class TestAreaResolutionGuardrail(unittest.IsolatedAsyncioTestCase):
                     {
                         "area_id": "yang_tai",
                         "area_name": "阳台",
-                        "ha_entities": ["cover.yang_tai_chuang_lian", "cover.yang_tai_sha_lian"],
+                        "ha_entities": ["switch.yang_tai_light"],
                     }
                 ],
             }

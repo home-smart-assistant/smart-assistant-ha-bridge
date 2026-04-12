@@ -18,6 +18,11 @@ class TestAreaResolutionCapability(unittest.IsolatedAsyncioTestCase):
         self.assertIn("dining_room", candidates)
         self.assertIn("can_ting", candidates)
 
+    def test_lookup_candidates_include_balcony_aliases(self) -> None:
+        candidates = _iter_area_lookup_candidates("balcony")
+        self.assertIn("阳台", candidates)
+        self.assertIn("yang_tai", candidates)
+
     def test_suggestion_prefers_dining_for_dining_light(self) -> None:
         suggested, token = _suggest_area_for_entity(
             entity_id="switch.ke_ting_can_ting_deng_l2",
@@ -49,6 +54,23 @@ class TestAreaResolutionCapability(unittest.IsolatedAsyncioTestCase):
         with patch("app.services.ha_service.get_ha_areas", new=fake_get_ha_areas):
             resolved = await resolve_area_entity("light", merged_args)
         self.assertEqual("switch.dining_light", resolved)
+
+    async def test_resolve_cover_area_entity_supports_balcony_alias(self) -> None:
+        async def fake_get_ha_areas(*, include_state_validation: bool = True):  # noqa: ARG001
+            return {
+                "success": True,
+                "areas": [
+                    {
+                        "area_id": "yang_tai",
+                        "area_name": "阳台",
+                        "ha_entities": ["cover.yang_tai_sha_lian", "cover.yang_tai_chuang_lian"],
+                    }
+                ],
+            }
+
+        with patch("app.services.ha_service.get_ha_areas", new=fake_get_ha_areas):
+            resolved = await resolve_area_entity("cover", {"area": "balcony"})
+        self.assertEqual(["cover.yang_tai_sha_lian", "cover.yang_tai_chuang_lian"], resolved)
 
     def test_suggestion_tokens_include_pinyin_alias(self) -> None:
         tokens = _build_area_suggestion_tokens("餐厅")

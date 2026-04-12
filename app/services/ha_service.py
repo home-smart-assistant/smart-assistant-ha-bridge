@@ -21,7 +21,7 @@ AREA_CATALOG_TEMPLATE = """{% set out = namespace(items=[]) %}
 {% endfor %}
 {{ out.items | to_json }}"""
 
-CANONICAL_AREA_ORDER = ["玄关", "厨房", "客厅", "主卧", "次卧", "餐厅", "书房", "卫生间", "走廊"]
+CANONICAL_AREA_ORDER = ["玄关", "厨房", "客厅", "主卧", "次卧", "餐厅", "书房", "卫生间", "走廊", "阳台"]
 AREA_NAME_ALIASES: dict[str, tuple[str, ...]] = {
     "玄关": ("玄关", "xuan_guan", "xuanguan", "entryway", "foyer"),
     "厨房": ("厨房", "kitchen", "chu_fang", "chufang"),
@@ -49,6 +49,7 @@ AREA_NAME_ALIASES: dict[str, tuple[str, ...]] = {
     "书房": ("书房", "study", "shu_fang", "shufang"),
     "卫生间": ("卫生间", "浴室", "bathroom", "wc", "toilet", "wei_sheng_jian", "weishengjian"),
     "走廊": ("走廊", "corridor", "hallway", "zou_lang", "zoulang"),
+    "阳台": ("阳台", "balcony", "yang_tai", "yangtai"),
 }
 AREA_CREATE_SEED: dict[str, str] = {
     "玄关": "xuan_guan",
@@ -60,6 +61,7 @@ AREA_CREATE_SEED: dict[str, str] = {
     "书房": "study",
     "卫生间": "bathroom",
     "走廊": "corridor",
+    "阳台": "yang_tai",
 }
 
 DEFAULT_AREA_AUDIT_DOMAINS = ("light", "switch", "climate", "cover", "fan")
@@ -93,6 +95,7 @@ AREA_AUDIT_SUGGESTION_ALIASES: dict[str, tuple[str, ...]] = {
     "书房": ("书房", "study", "shu_fang", "shufang"),
     "卫生间": ("卫生间", "浴室", "bathroom", "wc", "toilet", "wei_sheng_jian", "weishengjian"),
     "走廊": ("走廊", "corridor", "hallway", "zou_lang", "zoulang"),
+    "阳台": ("阳台", "balcony", "yang_tai", "yangtai"),
 }
 ENTITY_TYPE_DOMAIN_CANDIDATES: dict[str, tuple[str, ...]] = {
     "light": ("light", "switch"),
